@@ -1,0 +1,23 @@
+name: Auditar origen V4 para restauracion
+on:
+  push:
+    branches: ['restore/v4-original-exacta']
+    paths: ['.github/workflows/v4-restore-source-audit.yml']
+permissions:
+  contents: read
+jobs:
+  export-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 1c21ab1a49179125d8186db42643cc929375101e
+          persist-credentials: false
+      - name: Archive only tracked repository source
+        run: git archive --format=zip --output=/tmp/v4-before-restoration.zip HEAD
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v4-source-before-restoration
+          path: /tmp/v4-before-restoration.zip
+          retention-days: 1
