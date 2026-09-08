@@ -2,9 +2,9 @@ name: Validar demo V4
 
 on:
   push:
-    branches: [main]
+    branches: [main, railway-demo]
   pull_request:
-    branches: [main]
+    branches: [main, railway-demo]
 
 permissions:
   contents: read
