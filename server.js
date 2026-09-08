@@ -27,17 +27,18 @@ function loadIndexHtml() {
 
   const payloadFiles = fs
     .readdirSync(payloadDirectory)
-    .filter((name) => /^index\.html\.br\.b64\.part-\d+$/.test(name))
+    .filter((name) => /^index\.html\.br\.b64\.slice-\d+$/.test(name))
     .sort();
 
   if (payloadFiles.length === 0) {
     throw new Error('No se encontraron las partes comprimidas de index.html.');
   }
 
-  const compressed = Buffer.concat(
-    payloadFiles.map((name) => Buffer.from(fs.readFileSync(path.join(payloadDirectory, name), 'utf8').trim(), 'base64'))
-  );
+  const encodedPayload = payloadFiles
+    .map((name) => fs.readFileSync(path.join(payloadDirectory, name), 'utf8').trim())
+    .join('');
 
+  const compressed = Buffer.from(encodedPayload, 'base64');
   return zlib.brotliDecompressSync(compressed);
 }
 
