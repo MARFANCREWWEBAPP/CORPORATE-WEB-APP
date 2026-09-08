@@ -1,4 +1,8 @@
 'use strict';
+if (process.env.PORTAL_ENABLED === '1' || process.env.PORTAL_REDIRECT_URL) {
+  require('./portal/server').start();
+  return;
+}
 const fs = require('node:fs');
 const http = require('node:http');
 const crypto = require('node:crypto');

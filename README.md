@@ -1,5 +1,13 @@
 # Marquee Flow V4 original
 
+## Ampliación V4.1 en revisión
+
+El portal de espacios de eventos está preparado detrás de `PORTAL_ENABLED=1`. Añade cuentas reales, permisos por espacio, archivo de eventos y estadísticas conservando el HTML original. No se ha publicado esta ampliación en Railway.
+
+Antes de activarlo, revisar [la auditoría](AUDITORIA_V4_1.md) y [la configuración del portal](portal/README.md). La cuenta protegida `info@marquee.es` se provisiona en el almacenamiento privado del servidor; su contraseña nunca forma parte del repositorio.
+
+## Referencia restaurada
+
 Restauración exacta de la demo aprobada. `index.html` contiene toda la interfaz, estilos, scripts y logotipos originales, sin modificaciones.
 
 ## Ejecutar
