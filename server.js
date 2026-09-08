@@ -4,10 +4,10 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const path = require('node:path');
+const zlib = require('node:zlib');
 
 const HOST = process.env.HOST || '0.0.0.0';
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
-const INDEX_FILE = path.join(__dirname, 'index.html');
 const ACCESS_USER = process.env.SITE_ACCESS_USER || '';
 const ACCESS_PASSWORD = process.env.SITE_ACCESS_PASSWORD || '';
 const ACCESS_PROTECTION_ENABLED = Boolean(ACCESS_USER && ACCESS_PASSWORD);
@@ -16,11 +16,32 @@ if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
   throw new Error('PORT debe ser un número válido entre 1 y 65535.');
 }
 
-if (!fs.existsSync(INDEX_FILE)) {
-  throw new Error(`No se encuentra el archivo principal: ${INDEX_FILE}`);
+function loadIndexHtml() {
+  const directFile = path.join(__dirname, 'index.html');
+  if (fs.existsSync(directFile)) return fs.readFileSync(directFile);
+
+  const payloadDirectory = path.join(__dirname, 'app-payload');
+  if (!fs.existsSync(payloadDirectory)) {
+    throw new Error('No se encuentra index.html ni el directorio app-payload.');
+  }
+
+  const payloadFiles = fs
+    .readdirSync(payloadDirectory)
+    .filter((name) => /^index\.html\.br\.b64\.part-\d+$/.test(name))
+    .sort();
+
+  if (payloadFiles.length === 0) {
+    throw new Error('No se encontraron las partes comprimidas de index.html.');
+  }
+
+  const compressed = Buffer.concat(
+    payloadFiles.map((name) => Buffer.from(fs.readFileSync(path.join(payloadDirectory, name), 'utf8').trim(), 'base64'))
+  );
+
+  return zlib.brotliDecompressSync(compressed);
 }
 
-const indexHtml = fs.readFileSync(INDEX_FILE);
+const indexHtml = loadIndexHtml();
 
 function safeEqual(left, right) {
   const leftBuffer = Buffer.from(String(left));
@@ -83,7 +104,7 @@ const server = http.createServer((request, response) => {
     return send(
       response,
       200,
-      JSON.stringify({ status: 'ok', service: 'marquee-flow-v4-demo', version: '4.0.0-demo.1' }),
+      JSON.stringify({ status: 'ok', service: 'marquee-flow-v4-demo', version: '4.0.0-demo.2' }),
       'application/json; charset=utf-8',
       method
     );
