@@ -28,7 +28,7 @@ const CLOSED = ['NOT_ACCEPTED','CANCELLED','COMPLETED'];
 const STATUS_LABEL = {NEW_REQUEST:'Nueva petición',PENDING_REVIEW:'Pendiente de revisión',INFORMATION_PENDING:'Información pendiente',PREPARING_BUDGET:'Preparando presupuesto',BUDGET_SENT:'Presupuesto enviado',PENDING_RESPONSE:'Pendiente de respuesta',NEGOTIATION:'En negociación',CONFIRMED:'Confirmado',NOT_ACCEPTED:'No aceptado',CANCELLED:'Cancelado',COMPLETED:'Realizado'};
 const ops = user => ['ADMIN','COMMERCIAL'].includes(user.role);
 const admin = user => { if (user.role !== 'ADMIN') fail(403, 'Solo administración puede realizar esta acción.'); };
-const publicUser = user => { const {passwordHash, mfaSecret, mfaPending, recoveryCodes, ...result} = user; return {...result,mfaEnabled:Boolean(mfaSecret)}; };
+const publicUser = user => { const {passwordHash, mfaSecret, mfaPending, recoveryCodes, calendarTokenHash, ...result} = user; return {...result,mfaEnabled:Boolean(mfaSecret)}; };
 const venueIds = user => [...new Set([user.venueId,...(user.venueIds||[])].filter(Boolean))];
 const canVenue = (user, venueId) => ops(user) || venueIds(user).includes(venueId);
 async function passwordHash(password) {
@@ -47,19 +47,27 @@ function emptyState() {
   return {version:7, revision:0, users:[], venues:[], events:[], notifications:[], audit:[], settings:{showCommercialToVenue:true,staleDays:5,budgetResponseDays:4,emailNotifications:false,whatsappPrepared:false,automaticBackups:false,backupRetention:30}};
 }
 class Store {
-  constructor(directory) {
+  constructor(directory,options={}) {
     fs.mkdirSync(directory, {recursive:true,mode:0o700});
     this.directory = directory;
-    this.db = new DatabaseSync(path.join(directory, 'marquee.sqlite'));
+    this.db = options.databaseURL||options.postgresTestDirectory ? new (require('./postgres').PostgresDatabase)(options) : new DatabaseSync(path.join(directory, 'marquee.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions (token TEXT PRIMARY KEY, userId TEXT NOT NULL, csrf TEXT NOT NULL, expires INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, eventId TEXT NOT NULL, bytes BLOB NOT NULL);`);
     this.db.prepare('INSERT OR IGNORE INTO state VALUES (1,?)').run(JSON.stringify(emptyState()));
-    if (Object.values(this.db.prepare('PRAGMA quick_check').get())[0] !== 'ok') throw new Error('La base de datos no supera la verificación de integridad.');
+    // Changing the connection must never silently hide an existing local dataset.
+    const localDatabase=path.join(directory,'marquee.sqlite');
+    if(this.db.kind==='postgres'&&!this.read().users.length&&fs.existsSync(localDatabase)){
+      let local;
+      try{local=new DatabaseSync(localDatabase,{readOnly:true});const row=local.prepare('SELECT value FROM state WHERE id=1').get();if(row&&JSON.parse(row.value).users?.length)throw new Error('Hay datos SQLite existentes. Migra una copia verificada a PostgreSQL antes de cambiar la conexión.');}
+      catch(error){this.db.close();throw error;}
+      finally{local?.close();}
+    }
+    if (this.db.kind!=='postgres' && Object.values(this.db.prepare('PRAGMA quick_check').get())[0] !== 'ok') throw new Error('La base de datos no supera la verificación de integridad.');
     this.db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now());
   }
-  read() { const state=JSON.parse(this.db.prepare('SELECT value FROM state WHERE id=1').get().value); for(const key of ['clients','drafts','messageDrafts','resources','organizations','savedViews','outbox','resets'])state[key] ||= []; return state; }
+  read() { const state=JSON.parse(this.db.prepare('SELECT value FROM state WHERE id=1').get().value); for(const key of ['clients','drafts','messageDrafts','resources','organizations','savedViews','outbox','resets','integrationJobs','fileReplicas'])state[key] ||= []; return state; }
   transaction(actor, action, fn) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
@@ -113,6 +121,8 @@ class Store {
       if (!state.settings.showCommercialToVenue) event.assignedCommercialId=null;
       return event;
     });
+    state.fileReplicas=state.fileReplicas.filter(r=>state.events.some(e=>e.id===r.eventId));
+    state.integrationJobs=state.integrationJobs.filter(j=>j.userId===user.id&&state.events.some(e=>e.id===j.eventId));
     state.notifications=state.notifications.filter(n=>n.recipientId===user.id);
     state.clients=state.clients.filter(c=>canVenue(user,c.venueId));
     state.drafts=state.drafts.filter(d=>d.userId===user.id && !d.submittedEventId && canVenue(user,d.values.venueId||user.venueId));
@@ -304,6 +314,7 @@ class Store {
       const kind=choice(data.kind,['budgets','documents']);
       const file={id:id(),fileKey:id(),originalName:text(data.originalName,200,true),displayName:text(data.displayName||data.originalName,200,true),description:text(data.description,10000),mimeType:data.mimeType,sizeBytes:bytes.length,uploadedById:user.id,createdAt:now(),viewedBy:[],downloadedBy:[]};
       if(kind==='budgets') {file.amountCents=data.amount===''||data.amount===undefined?null:Math.round(Number(data.amount)*100);if(file.amountCents!==null&&(!Number.isSafeInteger(file.amountCents)||file.amountCents<0||file.amountCents>10000000000))fail(400,'Importe no válido.');file.currency='EUR';file.validUntil=date(data.validUntil);file.sha256=crypto.createHash('sha256').update(bytes).digest('hex');file.version=Math.max(0,...event.budgets.map(b=>b.version))+1;file.status=choice(data.status||'SENT',['DRAFT','SENT','FINAL']);file.isCurrent=file.status!=='DRAFT'; if(file.isCurrent)event.budgets.forEach(b=>b.isCurrent=false);}
+      if(kind==='budgets'&&data.generatedQuote){file.quote=require('./commercial').quoteValues(data.generatedQuote);if(file.quote.totalCents!==file.amountCents)fail(400,'El total no coincide con los conceptos del presupuesto.');}
       if(kind==='budgets' && file.status!=='DRAFT'){event.budgetSentAt=event.budgetSentAt||now();if(!['CONFIRMED',...CLOSED].includes(event.status)){event.status='BUDGET_SENT';event.waitingOn='VENUE';event.nextAction='Revisar presupuesto V'+file.version;}}
       else {file.visibility=ops(user)?choice(data.visibility||'SHARED',['SHARED','INTERNAL']):'SHARED';}
       this.db.prepare('INSERT INTO files VALUES (?,?,?)').run(file.fileKey,eventId,bytes);event[kind].push(file);
@@ -327,7 +338,7 @@ class Store {
     const folder=path.join(this.directory,'backups');fs.mkdirSync(folder,{recursive:true,mode:0o700});
     const filename=`marquee-${now().replaceAll(':','-')}-${id().slice(0,8)}.sqlite`;
     const destination=path.join(folder,filename);
-    this.db.prepare('VACUUM INTO ?').run(destination);
+    if(this.db.kind==='postgres')this.db.snapshotTo(destination);else this.db.prepare('VACUUM INTO ?').run(destination);
     const db=new DatabaseSync(destination,{readOnly:true});
     try {if(Object.values(db.prepare('PRAGMA integrity_check').get())[0]!=='ok')throw new Error('Copia no íntegra');} finally {db.close();}
     const bytes=fs.readFileSync(destination);

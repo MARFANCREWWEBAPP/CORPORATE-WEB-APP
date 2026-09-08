@@ -1,4 +1,6 @@
-# Aplicación de la auditoría de Marquee Flow
+> Actualización: el estado vigente y la demo están documentados en [DEMO_OPERATIVA.md](DEMO_OPERATIVA.md). Este documento conserva el registro de la auditoría anterior.
+
+# Aplicación de la auditoría de Marquee Audiovisuales
 
 8 de septiembre de 2026 · versión de trabajo 4.2.0
 

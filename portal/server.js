@@ -7,6 +7,8 @@ const zlib=require('node:zlib');
 const {Store,fail,id,now,email,text,admin,publicUser,passwordHash,verifyPassword,CLOSED,STATUSES,PROTECTED_ADMIN_EMAIL}=require('./store');
 const reliability=require('./reliability');
 reliability.install(Store);
+const operations=require('./operations');
+operations.install(Store);
 const {createSecurity}=require('./security');
 const {createMail}=require('./mail');
 const {scheduleConflicts}=require('./workflow-store');
@@ -33,14 +35,23 @@ function parseFile(data) {
   return {bytes,mimeType:types[extension]};
 }
 function createPortal(options={}) {
-  const env=options.env||process.env;
+  const suppliedEnv=options.env||process.env;
+  const demo=suppliedEnv.DEMO_MODE==='1';
+  const env=demo?{...suppliedEnv,DATABASE_URL:'',RESEND_API_KEY:'',BACKUP_S3_ENDPOINT:''}:suppliedEnv;
   const origin=new URL(env.APP_ORIGIN||'http://localhost:3000').origin;
   const production=env.NODE_ENV==='production'||Boolean(env.RAILWAY_ENVIRONMENT_ID);
-  if(production && (!env.APP_ORIGIN||!origin.startsWith('https://')||!env.DATA_DIR))throw new Error('Configura APP_ORIGIN HTTPS y DATA_DIR persistente antes de activar el portal.');
-  if(env.RAILWAY_ENVIRONMENT_ID && (!env.RAILWAY_VOLUME_MOUNT_PATH||path.resolve(env.DATA_DIR)!==path.resolve(env.RAILWAY_VOLUME_MOUNT_PATH)))throw new Error('El portal necesita un volumen Railway montado en DATA_DIR.');
-  const store=new Store(env.DATA_DIR||path.join(__dirname,'../.data'));
+  if(production && (!env.APP_ORIGIN||!origin.startsWith('https://')||(!demo&&!env.DATA_DIR)))throw new Error('Configura APP_ORIGIN HTTPS y DATA_DIR persistente antes de activar el portal.');
+  if(!demo && env.RAILWAY_ENVIRONMENT_ID && (!env.RAILWAY_VOLUME_MOUNT_PATH||path.resolve(env.DATA_DIR)!==path.resolve(env.RAILWAY_VOLUME_MOUNT_PATH)))throw new Error('El portal necesita un volumen Railway montado en DATA_DIR.');
+  const store=new Store(env.DATA_DIR||path.join(__dirname,demo?'../.demo-data':'../.data'),{databaseURL:env.DATABASE_URL,postgresTestDirectory:options.postgresTestDirectory});
+  try {if(demo)require('./demo').seedDemo(store);else if(store.read().demo)throw new Error('La base de demostración solo puede abrirse en modo demo.');}catch(error){store.close();throw error;}
   if(!store.read().users.length&&(env.BOOTSTRAP_TOKEN||'').length<32){store.close();throw new Error('Configura BOOTSTRAP_TOKEN de al menos 32 caracteres para el alta inicial.');}
   let security,recovery,mailer;try{security=createSecurity(store,env);recovery=reliability.createRecovery(store,env);mailer=createMail(store,env,security,options.mailFetch);}catch(error){store.close();throw error;}
+  const objectStorage=require('./object-storage').createObjectStorage(store,env,options.objectFetch);
+  const integrations=require('./integrations').createIntegrations(store,env,options.integrationFetch);
+  const automation=operations.createAutomation(store);
+  if(!options.noAutomaticBackup)automation.run();
+  const automationTimer=options.noAutomaticBackup?null:setInterval(()=>{try{automation.run();}catch(error){console.error('Seguimiento automático no completado:',error.name);}},60000);automationTimer?.unref();
+  const streams=new Set();
   const html=Buffer.from(buildPortal());
   const compressed=zlib.gzipSync(html);
   const hashes=[...html.toString().matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m=>`'sha256-${crypto.createHash('sha256').update(m[1]).digest('base64')}'`);
@@ -67,7 +78,7 @@ function createPortal(options={}) {
       if(req.headers['idempotency-key']&&!/^[a-zA-Z0-9_-]{16,100}$/.test(req.headers['idempotency-key']))fail(400,'Identificador de envío no válido.');
       const clientIp=reliability.clientAddress(req,env);
       const url=new URL(req.url,origin),route=url.pathname;
-      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.2.0-portal',storage:'persistent',backupStatus:lastBackupError?'error':'ok'});}
+      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.2.0-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
       if(['/','/index.html'].includes(route)&&['GET','HEAD'].includes(req.method)) {
         const gzip=/\bgzip\b/.test(req.headers['accept-encoding']||'');res.setHeader('Vary','Accept-Encoding');if(gzip)res.setHeader('Content-Encoding','gzip');return send(200,gzip?compressed:html,'text/html; charset=utf-8');
       }
@@ -78,13 +89,15 @@ function createPortal(options={}) {
         const filename=path.join(__dirname,'../node_modules/pdfjs-dist',route.slice(7));if(!fs.existsSync(filename))fail(404,'Recurso no encontrado.');return send(200,fs.readFileSync(filename),route.endsWith('.mjs')?'text/javascript; charset=utf-8':'application/octet-stream');
       }
       if(route==='/robots.txt'&&req.method==='GET')return send(200,'User-agent: *\nDisallow: /\n','text/plain');
+      const calendarMatch=route.match(/^\/calendar\/([A-Za-z0-9_-]{43})\.ics$/);
+      if(calendarMatch&&req.method==='GET'){const user=operations.calendarUser(store,calendarMatch[1]);if(!user)fail(404,'Suscripción no disponible.');return send(200,operations.calendar(store,user),'text/calendar; charset=utf-8');}
       if(!route.startsWith('/api/'))fail(404,'No encontrado.');
       if(!['GET','POST','PATCH'].includes(req.method))fail(405,'Método no permitido.');
       const write=req.method!=='GET';
       if(write && (req.headers.origin!==origin||req.headers['sec-fetch-site']==='cross-site'))fail(403,'Origen de la petición no permitido.');
       const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1)||'';
       const session=store.session(token);
-      if(route==='/api/session'&&req.method==='GET')return send(200,{user:session?publicUser(session.user):null,csrf:session?.csrf||null,setupRequired:store.read().users.length===0,setupEmail:store.read().users.length===0?PROTECTED_ADMIN_EMAIL:undefined});
+      if(route==='/api/session'&&req.method==='GET')return send(200,{user:session?publicUser(session.user):null,csrf:session?.csrf||null,demo:demo?{accounts:require('./demo').accounts,password:require('./demo').password}:null,setupRequired:store.read().users.length===0,setupEmail:store.read().users.length===0?PROTECTED_ADMIN_EMAIL:undefined});
       if(route==='/api/bootstrap'&&req.method==='POST') {
         rateLimit('setup:'+clientIp,5);const data=await readJson(req);
         if(store.read().users.length || !equal(data.token,env.BOOTSTRAP_TOKEN))fail(403,'El enlace de activación no es válido o ya se ha utilizado.');
@@ -103,11 +116,15 @@ function createPortal(options={}) {
         if(user.mfaSecret){if(!data.code)fail(401,'Introduce también el código de tu autenticador.');store.transaction(user,'MFA_LOGIN',state=>security.verifyMfa(state,user,data.code));}
         attempts.delete('email:'+normalized);const created=store.newSession(user);res.setHeader('Set-Cookie',cookie(created.token));return send(200,{user:created.user,csrf:created.csrf});
       }
+      if(demo&&['/api/password/forgot','/api/password/reset'].includes(route))fail(403,'Las credenciales de demostración están disponibles en el acceso.');
       if(route==='/api/password/forgot'&&req.method==='POST'){rateLimit('reset:'+clientIp,10);const data=await readJson(req);rateLimit('reset-email:'+String(data.email||'').slice(0,254).toLowerCase(),3);security.requestReset(data.email,mailer.configured);return send(200,{ok:true,message:'Si la cuenta está activa, recibirás un enlace de recuperación.'});}
       if(route==='/api/password/reset'&&req.method==='POST'){rateLimit('reset-use:'+clientIp,10);const result=await hashTask(async()=>security.reset(await readJson(req)));return send(200,result);}
       if(!session)fail(401,'Inicia sesión para continuar.');
       if(write&&!equal(req.headers['x-csrf-token'],session.csrf))fail(403,'La sesión de seguridad ha cambiado. Vuelve a entrar.');
       const user=session.user;
+      if(demo&&user.demoAccount&&write&&(route==='/api/password'||route.startsWith('/api/mfa/')))fail(403,'Las credenciales de los tres perfiles demo se mantienen para que todos puedan probarlos.');
+      if(demo&&write&&route.startsWith('/api/import/'))fail(403,'La demostración utiliza muestras. La importación de datos anteriores está disponible en el portal privado.');
+      if(demo&&req.method==='PATCH'&&route.startsWith('/api/users/')&&store.read().demo.accountIds.includes(route.split('/').at(-1)))fail(403,'Los tres perfiles de demostración mantienen su cuenta y permisos.');
       if(route==='/api/logout'&&req.method==='POST'){store.db.prepare('DELETE FROM sessions WHERE token=?').run(session.token);res.setHeader('Set-Cookie',cookie('',0));return send(200,{ok:true});}
       if(route==='/api/password'&&req.method==='POST') {
         rateLimit('password:'+user.id,10);const data=await readJson(req);
@@ -118,7 +135,20 @@ function createPortal(options={}) {
         const created=store.newSession(updated);res.setHeader('Set-Cookie',cookie(created.token));return send(200,{user:created.user,csrf:created.csrf});
       }
       if(user.mustChangePassword)fail(403,'Cambia la contraseña temporal antes de continuar.');
-      if(route==='/api/services'&&req.method==='GET'){admin(user);return send(200,{recovery:recovery.status(),mail:mailer.status()});}
+      if(route==='/api/changes'&&req.method==='GET'){
+        if(streams.size>=100)fail(429,'Demasiadas conexiones activas.');
+        res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-store','Connection':'keep-alive','X-Accel-Buffering':'no'});
+        const emitter=store.changeEmitter();let last=-1;
+        const update=()=>{if(!store.session(token)){res.end();return;}const revision=store.read().revision;if(revision!==last){res.write('data: '+JSON.stringify({revision})+'\n\n');last=revision;}};
+        const heartbeat=setInterval(()=>{update();if(!res.writableEnded)res.write(': conectado\n\n');},10000);heartbeat.unref();emitter.on('change',update);streams.add(res);res.on('close',()=>{clearInterval(heartbeat);emitter.off('change',update);streams.delete(res);});update();return;
+      }
+      if(route==='/api/daily-summary'&&req.method==='GET')return send(200,operations.dailySummary(store,user));
+      if(route==='/api/calendar'&&req.method==='GET'){res.setHeader('Content-Disposition','attachment; filename=marquee-eventos.ics');return send(200,operations.calendar(store,user),'text/calendar; charset=utf-8');}
+      if(route==='/api/calendar/subscription'&&req.method==='POST'){await readJson(req);const token=operations.createCalendarToken(store,user);return send(201,{url:new URL('/calendar/'+token+'.ics',origin).href});}
+      if(route==='/api/calendar/revoke'&&req.method==='POST'){await readJson(req);store.transaction(user,'CALENDAR_SUBSCRIPTION_REVOKED',state=>{delete state.users.find(u=>u.id===user.id).calendarTokenHash;});return send(200,{ok:true});}
+      if(route==='/api/operations/rules'&&req.method==='GET'){admin(user);return send(200,{rules:operations.rules(store.read())});}
+      if(route==='/api/operations/rules'&&req.method==='PATCH')return send(200,{result:store.saveRules(user,await readJson(req)),data:store.view(user)});
+      if(route==='/api/services'&&req.method==='GET'){admin(user);return send(200,{recovery:recovery.status(),mail:mailer.status(),documents:objectStorage.status()});}
       if(route==='/api/state'&&req.method==='GET')return send(200,{data:store.view(user)});
       if(route==='/api/backups'&&req.method==='GET'){admin(user);return send(200,{backups:store.backups(),lastBackupError,recovery:recovery.status()});}
       if(route==='/api/backups'&&req.method==='POST'){admin(user);await readJson(req);return send(201,{backup:makeBackup('manual')});}
@@ -133,6 +163,13 @@ function createPortal(options={}) {
         const disposition=url.searchParams.get('download')==='1'||!['application/pdf','image/png','image/jpeg'].includes(metadata.mimeType)?'attachment':'inline';
         res.setHeader('Content-Disposition',`${disposition}; filename*=UTF-8''${encodeURIComponent(metadata.originalName).replaceAll("'",'%27')}`);return send(200,bytes,metadata.mimeType);
       }
+      if(route==='/api/documents/replicas/review'&&req.method==='GET')return send(200,objectStorage.review(user));
+      if(route==='/api/documents/replicas/copy'&&req.method==='POST'){const result=await objectStorage.copyReviewed(user,await readJson(req));return send(200,{result,data:store.view(user)});}
+      if(route==='/api/integrations'&&req.method==='GET')return send(200,integrations.status());
+      const integrationMatch=route.match(/^\/api\/events\/([^/]+)\/integrations\/(odoo|whatsapp|assistant)$/);
+      if(integrationMatch&&req.method==='POST'){rateLimit('integration:'+user.id,20);const result=await integrations.run(user,integrationMatch[1],integrationMatch[2],await readJson(req),req.headers['idempotency-key']);return send(200,{result,data:store.view(user)});}
+      const generatedMatch=route.match(/^\/api\/events\/([^/]+)\/generate-budget$/);
+      if(generatedMatch&&req.method==='POST'){const result=await require('./commercial').generate(store,user,generatedMatch[1],await readJson(req),demo);return send(200,{result,data:store.view(user)});}
       const scheduleMatch=route.match(/^\/api\/events\/([^/]+)\/availability$/);
       if(scheduleMatch&&req.method==='GET'){if(!['ADMIN','COMMERCIAL'].includes(user.role))fail(403,'Solo Marquee consulta recursos.');return send(200,{conflicts:scheduleConflicts(store.read(),store.event(store.read(),user,scheduleMatch[1]))});}
       let result;
@@ -159,7 +196,7 @@ function createPortal(options={}) {
       else if(route==='/api/users'&&req.method==='POST'){admin(user);result=await hashTask(async()=>store.createUser(user,await readJson(req)));}
       else if(route.match(/^\/api\/users\/[^/]+$/)&&req.method==='PATCH'){admin(user);result=await hashTask(async()=>store.updateUser(user,route.split('/').at(-1),await readJson(req)));}
       else if(route==='/api/venues'&&req.method==='POST')result=store.saveVenue(user,null,await readJson(req));
-      else if(route.match(/^\/api\/venues\/[^/]+$/)&&req.method==='PATCH')result=store.saveVenue(user,route.split('/').at(-1),await readJson(req));
+      else if(route.match(/^\/api\/venues\/[^/]+$/)&&req.method==='PATCH'){const data=await readJson(req);if(demo&&data.state==='INACTIVE'&&store.read().demo.venueIds.includes(route.split('/').at(-1)))fail(403,'Este espacio se mantiene activo para el acceso de demostración.');result=store.saveVenue(user,route.split('/').at(-1),data);}
       else if(route==='/api/events'&&req.method==='POST')result=store.createEvent(user,await readJson(req));
       else if(route.match(/^\/api\/events\/[^/]+$/)&&req.method==='PATCH'){
         const data=await readJson(req);if(!Number.isInteger(data.revision))fail(400,'Falta la versión del evento.');
@@ -184,13 +221,13 @@ function createPortal(options={}) {
     }
   }));
   server.requestTimeout=45000;server.headersTimeout=15000;server.maxRequestsPerSocket=1000;
-  server.on('close',()=>{if(backupTimer)clearInterval(backupTimer);if(mailTimer)clearInterval(mailTimer);store.close();});
-  return {server,store,origin,recovery,mailer,security};
+  server.on('close',()=>{if(automationTimer)clearInterval(automationTimer);if(backupTimer)clearInterval(backupTimer);if(mailTimer)clearInterval(mailTimer);store.close();});
+  return {server,store,origin,recovery,mailer,security,automation,integrations,objectStorage,closeStreams:()=>{for(const response of streams)response.end();}};
 }
 function start() {
   const port=Number(process.env.PORT||3000);if(!Number.isInteger(port)||port<1||port>65535)throw new Error('PORT no válido.');
   if(process.env.PORTAL_REDIRECT_URL){const destination=new URL(process.env.PORTAL_REDIRECT_URL);if(destination.protocol!=='https:')throw new Error('La redirección debe ser HTTPS.');const server=http.createServer((req,res)=>{if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify({status:'ok',version:'4.2.0-redirect'}));}res.writeHead(307,{Location:new URL(new URL(req.url,'http://secondary.invalid').pathname+new URL(req.url,'http://secondary.invalid').search,destination).href,'Cache-Control':'no-store'});res.end();});server.listen(port,'0.0.0.0');return;}
-  const {server}=createPortal();server.listen(port,process.env.HOST||'0.0.0.0',()=>console.log('Marquee Flow: cuentas y datos persistentes, puerto '+port));
-  for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),5000).unref();});
+  const {server,closeStreams}=createPortal();server.listen(port,process.env.HOST||'0.0.0.0',()=>console.log('Marquee Audiovisuales: cuentas y datos persistentes, puerto '+port));
+  for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{closeStreams();server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),5000).unref();});
 }
 module.exports={createPortal,start,parseFile};

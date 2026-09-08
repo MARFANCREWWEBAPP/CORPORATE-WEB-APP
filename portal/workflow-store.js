@@ -58,6 +58,7 @@ function install(Store) {
     if(budget.decisions?.some(d=>['ACCEPTED','REJECTED'].includes(d.decision)))fail(409,'Esta versión ya tiene una decisión definitiva. Publica otra versión para modificarla.');
     const decision=choice(data.decision,['ACCEPTED','REJECTED','CHANGES_REQUESTED']);
     const reason=text(data.reason,5000,decision!=='ACCEPTED');
+    let signature=null;if(data.signature){if(decision!=='ACCEPTED'||data.signature.consent!==true)fail(400,'Debes aceptar expresamente el presupuesto antes de firmar.');signature={name:text(data.signature.name,200,true),method:'typed-name',statement:'He leído esta versión y acepto el presupuesto en nombre del cliente.',signedAt:now(),documentSha256:budget.sha256};}
     if(decision==='ACCEPTED'){
       this.checkSchedule(state,event,data,user);
       event.acceptedAt=event.acceptedAt||now();event.acceptedBudgetId=budget.id;event.acceptedAmountCents=budget.amountCents;event.status='CONFIRMED';event.waitingOn='NONE';
@@ -66,6 +67,7 @@ function install(Store) {
     const record={id:id(),decision,reason,actorId:user.id,actorName:[user.firstName,user.lastName].filter(Boolean).join(' '),actorEmail:user.email,createdAt:now(),version:budget.version,fileSha256:budget.sha256};
     (budget.decisions||=[]).push(record);
     this.history(event,user,`Presupuesto V${budget.version}: ${decision==='ACCEPTED'?'aceptado':decision==='REJECTED'?'rechazado':'cambios solicitados'}${reason?' · '+reason:''}`,'BUDGET_DECISION');
+    if(signature)record.signature=signature;
     this.notify(state,event,user,'Decisión sobre presupuesto V'+budget.version,event.eventName);return record;
   });};
   Store.prototype.saveClient=function(user,clientId,data){return this.transaction(user,'CLIENT_SAVED',state=>{
@@ -94,7 +96,7 @@ function install(Store) {
     Object.assign(resource,{name:text(data.name,200,true),kind:choice(data.kind,['EQUIPMENT','TEAM','VEHICLE']),active:data.active!==false,notes:text(data.notes,3000)});return resource;
   });};
   Store.prototype.saveView=function(user,data){return this.transaction(user,'VIEW_SAVED',state=>{const view={id:id(),userId:user.id,name:text(data.name,120,true),page:choice(data.page,['cancelled','completed','statistics']),filters:{}};for(const k of ['venue','from','to','q','eventType'])view.filters[k]=text(data.filters?.[k],500);state.savedViews.push(view);return view;});};
-  Store.prototype.preferences=function(user,data){return this.transaction(user,'PREFERENCES_UPDATED',state=>{const account=state.users.find(u=>u.id===user.id);account.preferences={...(account.preferences||{})};for(const k of ['requests','budgets','messages','updates'])if(k in data)account.preferences[k]=data[k]===true;return account.preferences;});};
+  Store.prototype.preferences=function(user,data){return this.transaction(user,'PREFERENCES_UPDATED',state=>{const account=state.users.find(u=>u.id===user.id);account.preferences={...(account.preferences||{})};for(const k of ['requests','budgets','messages','updates','reminders','dailySummary'])if(k in data)account.preferences[k]=data[k]===true;return account.preferences;});};
   const originalExport=Store.prototype.exportArchive;
   Store.prototype.exportArchive=function(user,status,filters={}){
     const result=originalExport.call(this,user,status);result.events=filterEvents(result.events,filters);
@@ -107,7 +109,7 @@ function install(Store) {
     const previous=new Set(state.notifications.map(n=>n.id));originalNotify.call(this,state,event,user,title,body,type);
     for(const n of state.notifications.filter(n=>!previous.has(n.id))){const recipient=state.users.find(u=>u.id===n.recipientId);const kind=type==='NEW_REQUEST'?'requests':type==='BUDGET_AVAILABLE'?'budgets':type==='NEW_COMMENT'?'messages':'updates';
       if(recipient?.preferences?.[kind]===false)continue;
-      state.outbox.push({id:n.id,recipientId:recipient.id,type:'notification',subject:'Marquee Flow · '+title,body:'Tienes una actualización en Marquee Flow. Entra en tu cuenta para consultar el expediente.',eventId:event.id,createdAt:now(),attempts:0,nextAttemptAt:now()});
+      state.outbox.push({id:n.id,recipientId:recipient.id,type:'notification',subject:'Marquee Audiovisuales · '+title,body:'Tienes una actualización en Marquee Audiovisuales. Entra en tu cuenta para consultar el expediente.',eventId:event.id,createdAt:now(),attempts:0,nextAttemptAt:now()});
     }
   };
 }

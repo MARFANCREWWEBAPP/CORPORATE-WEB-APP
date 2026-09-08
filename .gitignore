@@ -9,3 +9,4 @@ coverage/
 *.sqlite
 *.sqlite-wal
 *.sqlite-shm
+.demo-data/

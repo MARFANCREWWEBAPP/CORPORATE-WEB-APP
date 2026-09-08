@@ -17,7 +17,7 @@ function buildPortal() {
   // Place the storage facade in the same lexical scope as the original application.
   replace(/  function loadData\(\)/g,memory+'  function loadData()',1);
   let bridge=fs.readFileSync(path.join(__dirname,'client.js'),'utf8');
-  bridge=bridge.replace('  portalBoot();',fs.readFileSync(path.join(__dirname,'client-workflows.js'),'utf8')+'\n  portalBoot();');
+  bridge=bridge.replace('  portalBoot();',fs.readFileSync(path.join(__dirname,'client-workflows.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client-operations.js'),'utf8')+'\n  portalBoot();');
   replace(/  const initialPage = location.hash.replace/g,bridge+'\n  const initialPage = location.hash.replace',1);
   const styles=fs.readFileSync(path.join(__dirname,'portal.css'),'utf8');
   replace(/<\/style>/g,styles+'\n</style>',1);
@@ -36,6 +36,7 @@ function buildPortal() {
     ['FINCAS','ESPACIOS DE EVENTOS'],['FINCA','ESPACIO DE EVENTOS'],['Fincas','Espacios de eventos'],['fincas','espacios de eventos'],['Finca','Espacio de eventos'],['finca','espacio de eventos']
   ];
   for(const [from,to]of terms)html=html.replaceAll(from,to);
+  html=html.replace(/\bMarquee Flow(?: V4)?\b/gi,'Marquee Audiovisuales').replaceAll('FLOW V4 · DEMO','DEMO').replaceAll('FLOW V4','ESPACIO DE EVENTOS');
   html=html.replaceAll('Borrador guardado automáticamente','Borrador en esta pestaña · envía para guardarlo');
   html=html.replaceAll('Un formulario guiado, con guardado automático y posibilidad de completar información más adelante.','La petición se guarda en el sistema al enviarla. Puedes completar después la información que falte.');
   html=html.replaceAll('Próximos y realizados','Confirmados actualmente');

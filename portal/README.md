@@ -1,4 +1,6 @@
-# Portal V4.1 — versión para revisión
+# Portal privado — configuración técnica
+
+> Estado actual: [V4 Operativa](../DEMO_OPERATIVA.md). `npm start` y Railway arrancan la demo aislada. Para el portal privado se utiliza `PORTAL_ENABLED=1 node server.js`, sin DEMO_MODE, y se mantienen las protecciones de producción. Las secciones V4.1 siguientes son históricas; las actualizaciones posteriores prevalecen.
 
 Se conserva `index.html` con los bytes originales. `template.js` integra la capa de cuentas y almacenamiento al generar la respuesta; no altera el fichero de referencia. La nueva versión se activa expresamente con `PORTAL_ENABLED=1`. Sin esa variable continúa la V4 original.
 
@@ -88,3 +90,19 @@ Objetivo inicial de recuperación propuesto: pérdida máxima de una hora de cam
 - Las credenciales temporales de usuarios no se conservan en el historial de reintentos. Las operaciones persistentes de eventos, comentarios, archivos y borradores mantienen su identificador durante 90 días.
 - El correo se envía en lotes desde una cola persistente, con reintentos y claves de idempotencia. Los enlaces de recuperación caducan en 30 minutos y los códigos de recuperación son de un solo uso. El segundo factor se mantiene tras un cambio de contraseña.
 - Las importaciones no crean accesos de la demo, no sustituyen expedientes actuales y conservan autores históricos como texto. Deben partir de una copia completa que incluya todos los archivos referenciados.
+
+
+## V4 Operativa — conexiones preparadas
+
+`npm start` fuerza DEMO_MODE y no utiliza servicios externos aunque herede claves. Para producción privada: `PORTAL_ENABLED=1 node server.js`, sin DEMO_MODE. Se siguen exigiendo APP_ORIGIN HTTPS, volumen en DATA_DIR, PORTAL_SECRET_KEY y configuración inicial. PostgreSQL no elimina la necesidad de almacenar copias locales en un volumen.
+
+- `DATABASE_URL`: conexión PostgreSQL con TLS según el proveedor. SQLite sigue disponible cuando no existe esta variable. El adaptador usa `pg`; PGlite es dependencia exclusiva de desarrollo para probar el motor.
+- Migración: `DATABASE_URL=... DATA_DIR=/destino/nuevo node scripts/migrate-postgres.js /copia/verificada.sqlite SHA256`. Facilitar DATABASE_URL mediante el gestor de secretos, no guardar la línea con secretos en el historial. Destino vacío obligatorio, origen intacto, sin migrar sesiones ni datos demo.
+- `FILES_S3_ENDPOINT`, `FILES_S3_BUCKET`, `FILES_S3_ACCESS_KEY`, `FILES_S3_SECRET_KEY`, opcionales `FILES_S3_REGION` (auto) y `FILES_S3_SESSION_TOKEN`; `FILES_ENCRYPTION_KEY` son 32 bytes aleatorios base64. Copias de documentos cifradas con revisión y confirmación de lote y destino. No hay transferencia automática de documentos. Los archivos originales permanecen en la base.
+- `ODOO_URL` HTTPS, `ODOO_DATABASE`, `ODOO_API_KEY`: CRM por JSON-2 (Odoo 19). Validar versión/plan/permisos y renovación de claves antes de activar.
+- `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_TEMPLATE`, `WHATSAPP_API_VERSION`, opcional `WHATSAPP_LANGUAGE` (es). La plantilla recibe nombre de evento y próxima acción. Validar formato con la plantilla aprobada real. Un identificador de proveedor confirma recepción de la petición, no entrega al destinatario.
+- `OPENAI_API_KEY`, `OPENAI_MODEL`: asistente con contexto autorizado del evento, `store:false`, sin escrituras autónomas. Validar consentimiento y condiciones del proveedor antes de operar con datos reales.
+- Las operaciones externas mantienen un registro y clave de idempotencia; si una respuesta es incierta exigen comprobar el servicio antes de repetir. No rotar la clave de envío para forzar reintentos.
+- Los enlaces de calendario son secretos revocables por usuario, guardados como hash y limitados a sus espacios. Compartirlos concede lectura del calendario a quien reciba el enlace.
+
+La prueba PostgreSQL usa el motor embebido; no acredita la conexión TCP/TLS de Railway, la carga de producción ni una restauración desde un proveedor real. La réplica S3 se prueba con transporte controlado y comparación de bytes; la activación requiere un ensayo con el destino acordado.
