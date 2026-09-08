@@ -16,7 +16,8 @@ function buildPortal() {
   const memory='const portalMemoryValues = new Map(); const portalMemoryStorage = {getItem: key => portalMemoryValues.get(key) || null, setItem: (key,value) => portalMemoryValues.set(key,value), removeItem: key => portalMemoryValues.delete(key)};\n';
   // Place the storage facade in the same lexical scope as the original application.
   replace(/  function loadData\(\)/g,memory+'  function loadData()',1);
-  const bridge=fs.readFileSync(path.join(__dirname,'client.js'),'utf8');
+  let bridge=fs.readFileSync(path.join(__dirname,'client.js'),'utf8');
+  bridge=bridge.replace('  portalBoot();',fs.readFileSync(path.join(__dirname,'client-workflows.js'),'utf8')+'\n  portalBoot();');
   replace(/  const initialPage = location.hash.replace/g,bridge+'\n  const initialPage = location.hash.replace',1);
   const styles=fs.readFileSync(path.join(__dirname,'portal.css'),'utf8');
   replace(/<\/style>/g,styles+'\n</style>',1);
@@ -40,6 +41,9 @@ function buildPortal() {
   html=html.replaceAll('Próximos y realizados','Confirmados actualmente');
   html=html.replaceAll('espacio de eventos o espacio','espacio de eventos').replaceAll('espacios de eventos o espacios','espacios de eventos');
   for(const [from,to]of [['de el espacio','del espacio'],['a el espacio','al espacio'],['misma espacio','mismo espacio'],['tu espacio de eventos','tu espacio de eventos'],['espacio de eventos activa','espacio de eventos activo'],['espacio de eventos obligatoria','espacio de eventos obligatorio'],['la primera espacio','el primer espacio']])html=html.replaceAll(from,to);
+  html=html.replaceAll('app.data.venues.filter(v => v.id === user.venueId)','app.data.venues.filter(v => auditAllowedVenue(user,v.id))');
+  html=html.replaceAll('d.estimatedStartTime || \"18:00\"','d.estimatedStartTime || \"\"').replaceAll('d.estimatedEndTime || \"23:30\"','d.estimatedEndTime || \"\"');
+  html=html.replaceAll('Con estos datos la petición ya aparecerá en el calendario.','Elige la fecha del evento. La petición aparecerá en el calendario cuando la envíes.');
   return html;
 }
 module.exports={buildPortal};

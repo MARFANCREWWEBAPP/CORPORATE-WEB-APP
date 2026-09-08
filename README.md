@@ -34,3 +34,7 @@ Esta entrega es una demo de diseño y flujo con datos guardados en el navegador.
 Railway no se modifica ni despliega durante esta restauración. Su configuración existente queda intacta. Antes de una futura publicación se debe revisar la vinculación de ramas y el despliegue automático.
 
 Fuente, limpieza, backups y pruebas: [RESTORE_V4_ORIGINAL.md](RESTORE_V4_ORIGINAL.md).
+
+## Mejoras de la auditoría (4.2.0)
+
+El portal incorpora borradores persistentes, decisiones e importes de presupuestos, clientes unificados, varios espacios por usuario, organizaciones, planificación de recursos, chat ampliado, segundo factor, recuperación, importación revisable y visor PDF. Consulta [el estado de implementación](IMPLEMENTACION_AUDITORIA.md) y [la configuración](portal/README.md). La activación en producción y los servicios externos permanecen pendientes de configuración; la V4 original continúa siendo la opción predeterminada.

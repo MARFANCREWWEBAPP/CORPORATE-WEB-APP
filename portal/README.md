@@ -48,3 +48,43 @@ La prueba automatizada realiza la recuperación en otra carpeta, verifica un eve
 `npm run check` valida el original, la sintaxis del portal y la terminología. `npm test` comprueba cuentas, aislamiento de espacios, CSRF, contraseñas temporales, cuenta protegida, concurrencia, archivos, archivo/reapertura, persistencia tras reinicio y recuperación de una copia; también mantiene las comprobaciones de los tres arranques de la V4 original.
 
 Las pruebas de navegador se realizan con datos de muestra, separados de la producción. No migrar esas cuentas o eventos de prueba a Railway.
+
+# Actualización 4.2.0 — aplicación de la auditoría
+
+El estado actualizado y las limitaciones de la entrega están en `../IMPLEMENTACION_AUDITORIA.md`; las secciones anteriores describen el punto de partida 4.1. Instalar con `npm ci` antes de arrancar. PDF.js es la única dependencia directa nueva y se sirve desde el propio servidor; no se envían PDFs a un visor externo.
+
+## Variables nuevas
+
+- `PORTAL_SECRET_KEY`: 32 bytes aleatorios codificados en base64. Obligatoria en producción. Cifra secretos TOTP y enlaces temporales en la cola de correo. Guardarla fuera del repositorio en el gestor de secretos de infraestructura y conservar una copia fuera del servicio para recuperación. En desarrollo se genera `.security-key` en DATA_DIR; no debe incluirse en Git.
+- `TRUST_RAILWAY_PROXY=1`: acepta `X-Real-IP` únicamente cuando existe `RAILWAY_ENVIRONMENT_ID`. En otros entornos se usa la conexión directa.
+- `RESEND_API_KEY`, `MAIL_FROM`, opcional `MAIL_REPLY_TO`: activan la entrega de correo. El dominio de `MAIL_FROM` debe estar verificado en Resend. Sin ellas el sistema muestra que el correo está pendiente y no envía.
+- `BACKUP_S3_ENDPOINT`, `BACKUP_S3_BUCKET`, `BACKUP_S3_REGION` (por defecto `auto`), `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY`, opcional `BACKUP_S3_SESSION_TOKEN`: destino privado compatible con S3. Conceder solo acceso al depósito de copias.
+- `BACKUP_ENCRYPTION_KEY`: otros 32 bytes aleatorios en base64, conservados fuera del servicio. Cifra las copias antes de subirlas; es imprescindible para recuperarlas.
+
+No poner credenciales en parámetros de URL, scripts versionados o el código del navegador. El usuario mantiene el control de las claves del administrador. No activar segundo factor en su cuenta sin que haya vinculado y probado su autenticador.
+
+## Política de recuperación
+
+Se comprueban cambios cada hora y al archivar expedientes. Un arranque sin cambios no genera una copia redundante durante las primeras 24 horas. Se conservan el mínimo de cinco copias recientes, un punto por día de los últimos 31 días, un punto por mes de los últimos 12 meses y todas las copias manuales o previas a una importación. Solo se limpian copias automáticas redundantes; nunca expedientes archivados. Con destino externo configurado, una copia no se limpia antes de subirse.
+
+La subida externa incluye el archivo cifrado y un manifiesto con la huella SHA-256 de la copia original y del objeto cifrado. Las copias externas no se borran automáticamente en esta entrega. Configurar el ciclo de vida del depósito según el volumen y la retención acordados, manteniendo copias mensuales. El panel distingue configuración, última subida y errores; eso no sustituye a realizar una recuperación real de una copia descargada.
+
+Recuperación en carpeta nueva:
+
+```
+node scripts/restore-backup.js /ruta/copia.sqlite /ruta/recuperacion-nueva SHA256_ORIGINAL
+```
+
+Para una copia `.enc`, facilitar `BACKUP_ENCRYPTION_KEY` mediante el gestor de secretos. El comando verifica, descifra, comprueba SQLite y anula las sesiones y enlaces de recuperación antiguos. Arrancar la copia aislada con el mismo `PORTAL_SECRET_KEY` para que los autenticadores existentes sigan funcionando. Conservar intacta la base anterior hasta terminar las pruebas. No sustituir la base en uso desde el navegador.
+
+Objetivo inicial de recuperación propuesto: pérdida máxima de una hora de cambios ante pérdida del servicio cuando las copias externas funcionen, y recuperación dentro de cuatro horas. Son objetivos operativos pendientes de validar en Railway, no garantías de esta versión local.
+
+## Modelo y reglas
+
+- Las membresías `venueId` y `venueIds` se comprueban en el servidor; pertenecer a una organización no concede automáticamente todos sus espacios.
+- Los borradores son de su autor y usan revisión. En caso de conflicto, conservar una copia antes de elegir qué continuar.
+- La aceptación referencia presupuesto, versión, huella, actor y fecha. La validez se comprueba en el servidor. Una nueva versión no sobrescribe el documento anterior.
+- La planificación considera fecha local del evento, horas, sala y minutos de montaje/desmontaje. Hora final anterior o igual a la inicial se interpreta como finalización al día siguiente. Se detectan solapes entre confirmados y se requiere un motivo para la excepción de Marquee.
+- Las credenciales temporales de usuarios no se conservan en el historial de reintentos. Las operaciones persistentes de eventos, comentarios, archivos y borradores mantienen su identificador durante 90 días.
+- El correo se envía en lotes desde una cola persistente, con reintentos y claves de idempotencia. Los enlaces de recuperación caducan en 30 minutos y los códigos de recuperación son de un solo uso. El segundo factor se mantiene tras un cambio de contraseña.
+- Las importaciones no crean accesos de la demo, no sustituyen expedientes actuales y conservan autores históricos como texto. Deben partir de una copia completa que incluya todos los archivos referenciados.

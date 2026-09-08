@@ -1,8 +1,8 @@
 {
   "name": "marquee-flow-v4-demo",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "private": true,
-  "description": "Demo interna de Marquee Flow V4 para validaci\u00f3n en Railway.",
+  "description": "Marquee Flow: portal de espacios, presupuestos, planificación y conservación de expedientes",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=22.16"
@@ -11,6 +11,9 @@
     "start": "node server.js",
     "dev": "node server.js",
     "check": "node --check server.js && node scripts/check-original.js && node scripts/check-portal.js",
-    "test": "node --test scripts/server.test.js scripts/portal.test.js"
+    "test": "node --test scripts/server.test.js scripts/portal.test.js scripts/workflows.test.js"
+  },
+  "dependencies": {
+    "pdfjs-dist": "6.3.289"
   }
 }

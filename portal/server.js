@@ -5,6 +5,11 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const zlib=require('node:zlib');
 const {Store,fail,id,now,email,text,admin,publicUser,passwordHash,verifyPassword,CLOSED,STATUSES,PROTECTED_ADMIN_EMAIL}=require('./store');
+const reliability=require('./reliability');
+reliability.install(Store);
+const {createSecurity}=require('./security');
+const {createMail}=require('./mail');
+const {scheduleConflicts}=require('./workflow-store');
 const {buildPortal}=require('./template');
 const equal=(a,b)=>{const left=Buffer.from(a||''),right=Buffer.from(b||'');return left.length===right.length&&crypto.timingSafeEqual(left,right);};
 const MAX_FILE=20*1024*1024;
@@ -14,7 +19,7 @@ async function readJson(req,limit=128*1024) {
   const chunks=[];let size=0;
   for await(const chunk of req){size+=chunk.length;if(size>limit)fail(413,'La petición supera el tamaño permitido.');chunks.push(chunk);}
   let result;try{result=JSON.parse(Buffer.concat(chunks).toString());}catch{fail(400,'Petición no válida.');}
-  if(!result||typeof result!=='object'||Array.isArray(result))fail(400,'Petición no válida.');return result;
+  if(!result||typeof result!=='object'||Array.isArray(result))fail(400,'Petición no válida.');const operation=reliability.context.getStore();if(operation?.key)operation.digest=reliability.sha(operation.route+'\n'+JSON.stringify(result));return result;
 }
 function parseFile(data) {
   const name=text(data.originalName,200,true);
@@ -35,6 +40,7 @@ function createPortal(options={}) {
   if(env.RAILWAY_ENVIRONMENT_ID && (!env.RAILWAY_VOLUME_MOUNT_PATH||path.resolve(env.DATA_DIR)!==path.resolve(env.RAILWAY_VOLUME_MOUNT_PATH)))throw new Error('El portal necesita un volumen Railway montado en DATA_DIR.');
   const store=new Store(env.DATA_DIR||path.join(__dirname,'../.data'));
   if(!store.read().users.length&&(env.BOOTSTRAP_TOKEN||'').length<32){store.close();throw new Error('Configura BOOTSTRAP_TOKEN de al menos 32 caracteres para el alta inicial.');}
+  let security,recovery,mailer;try{security=createSecurity(store,env);recovery=reliability.createRecovery(store,env);mailer=createMail(store,env,security,options.mailFetch);}catch(error){store.close();throw error;}
   const html=Buffer.from(buildPortal());
   const compressed=zlib.gzipSync(html);
   const hashes=[...html.toString().matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m=>`'sha256-${crypto.createHash('sha256').update(m[1]).digest('base64')}'`);
@@ -45,22 +51,31 @@ function createPortal(options={}) {
   function rateLimit(key,max=10) {
     const previous=attempts.get(key);const entry=previous&&previous.until>Date.now()?previous:{count:0,until:Date.now()+15*60000};
     if(++entry.count>max)fail(429,'Demasiados intentos. Espera unos minutos antes de volver a intentarlo.');attempts.set(key,entry);
-    if(attempts.size>5000)for(const [k,v]of attempts)if(v.until<Date.now())attempts.delete(k);
+    if(attempts.size>5000){for(const [k,v]of attempts)if(v.until<Date.now())attempts.delete(k);while(attempts.size>5000)attempts.delete(attempts.keys().next().value);}
   }
   async function hashTask(fn){if(hashing>=4)fail(429,'Hay varios accesos en curso. Vuelve a intentarlo en unos segundos.');hashing++;try{return await fn();}finally{hashing--;}}
-  function makeBackup(reason){try{const result=store.backup(reason);lastBackupError=null;return result;}catch(error){lastBackupError=now();console.error('No se pudo completar la copia de recuperación:',error.code||error.name);throw error;}}
+  function makeBackup(reason){try{const result=recovery.make(reason,reason==='manual'||reason==='antes de importar');lastBackupError=null;void recovery.external();return result;}catch(error){lastBackupError=now();console.error('No se pudo completar la copia de recuperación:',error.code||error.name);throw error;}}
   if(!options.noAutomaticBackup)makeBackup('arranque');
-  const backupTimer=options.noAutomaticBackup?null:setInterval(()=>{try{makeBackup('automática diaria');}catch{}},24*3600000);
+  const backupTimer=options.noAutomaticBackup?null:setInterval(()=>{try{makeBackup('automática horaria');recovery.prune();}catch{}try{recovery.report();}catch{}},3600000);
   backupTimer?.unref();
-  const server=http.createServer(async(req,res)=> {
+  const mailTimer=options.noAutomaticMail?null:setInterval(()=>void mailer.flush(),30000);mailTimer?.unref();
+  const server=http.createServer((req,res)=>reliability.context.run({route:req.method+' '+req.url,key:/^\/api\/(events|drafts|clients|resources|organizations|views)(\/|$)/.test(req.url)?req.headers['idempotency-key']:null},async()=> {
     res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('X-Frame-Options','DENY');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Robots-Tag','noindex, nofollow');res.setHeader('Content-Security-Policy',csp);
     if(production)res.setHeader('Strict-Transport-Security','max-age=31536000');
     const send=(status,body,type='application/json; charset=utf-8')=>{const bytes=Buffer.isBuffer(body)?body:Buffer.from(type.startsWith('application/json')?JSON.stringify(body):String(body));res.writeHead(status,{'Content-Type':type,'Content-Length':bytes.length});res.end(req.method==='HEAD'?undefined:bytes);};
     try {
+      if(req.headers['idempotency-key']&&!/^[a-zA-Z0-9_-]{16,100}$/.test(req.headers['idempotency-key']))fail(400,'Identificador de envío no válido.');
+      const clientIp=reliability.clientAddress(req,env);
       const url=new URL(req.url,origin),route=url.pathname;
-      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.1.0-portal',storage:'persistent',backupStatus:lastBackupError?'error':'ok'});}
+      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.2.0-portal',storage:'persistent',backupStatus:lastBackupError?'error':'ok'});}
       if(['/','/index.html'].includes(route)&&['GET','HEAD'].includes(req.method)) {
         const gzip=/\bgzip\b/.test(req.headers['accept-encoding']||'');res.setHeader('Vary','Accept-Encoding');if(gzip)res.setHeader('Content-Encoding','gzip');return send(200,gzip?compressed:html,'text/html; charset=utf-8');
+      }
+      if(['/viewer','/viewer.js','/viewer.css'].includes(route)&&req.method==='GET'){
+        const filename=route==='/viewer'?'viewer.html':route.slice(1);res.setHeader('X-Frame-Options','SAMEORIGIN');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; worker-src 'self'; font-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; object-src 'none'; frame-ancestors 'self'; base-uri 'none'");return send(200,fs.readFileSync(path.join(__dirname,filename)),route==='/viewer'?'text/html; charset=utf-8':route.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8');
+      }
+      if(/^\/pdfjs\/(build\/(pdf|pdf.worker)\.mjs|standard_fonts\/[a-zA-Z0-9_.-]+|cmaps\/[a-zA-Z0-9_.-]+)$/.test(route)&&req.method==='GET'){
+        const filename=path.join(__dirname,'../node_modules/pdfjs-dist',route.slice(7));if(!fs.existsSync(filename))fail(404,'Recurso no encontrado.');return send(200,fs.readFileSync(filename),route.endsWith('.mjs')?'text/javascript; charset=utf-8':'application/octet-stream');
       }
       if(route==='/robots.txt'&&req.method==='GET')return send(200,'User-agent: *\nDisallow: /\n','text/plain');
       if(!route.startsWith('/api/'))fail(404,'No encontrado.');
@@ -71,7 +86,7 @@ function createPortal(options={}) {
       const session=store.session(token);
       if(route==='/api/session'&&req.method==='GET')return send(200,{user:session?publicUser(session.user):null,csrf:session?.csrf||null,setupRequired:store.read().users.length===0,setupEmail:store.read().users.length===0?PROTECTED_ADMIN_EMAIL:undefined});
       if(route==='/api/bootstrap'&&req.method==='POST') {
-        rateLimit('setup:'+req.socket.remoteAddress,5);const data=await readJson(req);
+        rateLimit('setup:'+clientIp,5);const data=await readJson(req);
         if(store.read().users.length || !equal(data.token,env.BOOTSTRAP_TOKEN))fail(403,'El enlace de activación no es válido o ya se ha utilizado.');
         if(email(data.email)!==PROTECTED_ADMIN_EMAIL)fail(400,'La cuenta inicial debe ser la de administración protegida.');
         const hash=await hashTask(()=>passwordHash(data.password));
@@ -79,14 +94,17 @@ function createPortal(options={}) {
         const created=store.newSession(user);res.setHeader('Set-Cookie',cookie(created.token));return send(201,{user:created.user,csrf:created.csrf});
       }
       if(route==='/api/login'&&req.method==='POST') {
-        const data=await readJson(req);const normalized=String(data.email||'').trim().toLowerCase();
-        rateLimit('login:'+req.socket.remoteAddress,40);rateLimit('email:'+normalized,10);
+        const data=await readJson(req);const normalized=String(data.email||'').trim().toLowerCase().slice(0,254);
+        rateLimit('login:'+clientIp,40);rateLimit('email:'+normalized,10);
         const state=store.read(),user=state.users.find(u=>u.email===normalized);
         const dummy='00000000000000000000000000000000:'+ '00'.repeat(64);
         const valid=await hashTask(()=>verifyPassword(data.password,user?.passwordHash||dummy));
-        if(!valid||!user?.active||(user.role==='VENUE_USER'&&!state.venues.some(v=>v.id===user.venueId&&v.state==='ACTIVE')))fail(401,'Email o contraseña incorrectos, o cuenta desactivada.');
+        if(!valid||!user?.active||(user.role==='VENUE_USER'&&!state.venues.some(v=>require('./store').canVenue(user,v.id)&&v.state==='ACTIVE')))fail(401,'Email o contraseña incorrectos, o cuenta desactivada.');
+        if(user.mfaSecret){if(!data.code)fail(401,'Introduce también el código de tu autenticador.');store.transaction(user,'MFA_LOGIN',state=>security.verifyMfa(state,user,data.code));}
         attempts.delete('email:'+normalized);const created=store.newSession(user);res.setHeader('Set-Cookie',cookie(created.token));return send(200,{user:created.user,csrf:created.csrf});
       }
+      if(route==='/api/password/forgot'&&req.method==='POST'){rateLimit('reset:'+clientIp,10);const data=await readJson(req);rateLimit('reset-email:'+String(data.email||'').slice(0,254).toLowerCase(),3);security.requestReset(data.email,mailer.configured);return send(200,{ok:true,message:'Si la cuenta está activa, recibirás un enlace de recuperación.'});}
+      if(route==='/api/password/reset'&&req.method==='POST'){rateLimit('reset-use:'+clientIp,10);const result=await hashTask(async()=>security.reset(await readJson(req)));return send(200,result);}
       if(!session)fail(401,'Inicia sesión para continuar.');
       if(write&&!equal(req.headers['x-csrf-token'],session.csrf))fail(403,'La sesión de seguridad ha cambiado. Vuelve a entrar.');
       const user=session.user;
@@ -100,12 +118,13 @@ function createPortal(options={}) {
         const created=store.newSession(updated);res.setHeader('Set-Cookie',cookie(created.token));return send(200,{user:created.user,csrf:created.csrf});
       }
       if(user.mustChangePassword)fail(403,'Cambia la contraseña temporal antes de continuar.');
+      if(route==='/api/services'&&req.method==='GET'){admin(user);return send(200,{recovery:recovery.status(),mail:mailer.status()});}
       if(route==='/api/state'&&req.method==='GET')return send(200,{data:store.view(user)});
-      if(route==='/api/backups'&&req.method==='GET'){admin(user);return send(200,{backups:store.backups(),lastBackupError});}
+      if(route==='/api/backups'&&req.method==='GET'){admin(user);return send(200,{backups:store.backups(),lastBackupError,recovery:recovery.status()});}
       if(route==='/api/backups'&&req.method==='POST'){admin(user);await readJson(req);return send(201,{backup:makeBackup('manual')});}
       if(route==='/api/export'&&req.method==='GET') {
         admin(user);const status=url.searchParams.get('status');if(status&&!STATUSES.includes(status))fail(400,'Categoría no válida.');
-        const payload=store.exportArchive(user,status);const serialized=JSON.stringify(payload);const sha256=crypto.createHash('sha256').update(serialized).digest('hex');
+        const payload=store.exportArchive(user,status,Object.fromEntries(url.searchParams));const serialized=JSON.stringify(payload);const sha256=crypto.createHash('sha256').update(serialized).digest('hex');
         res.setHeader('Content-Disposition',`attachment; filename="marquee-${status||'completo'}-${now().slice(0,10)}.json"`);return send(200,{sha256,payload});
       }
       const fileMatch=route.match(/^\/api\/files\/([a-z0-9-]+)$/i);
@@ -114,8 +133,29 @@ function createPortal(options={}) {
         const disposition=url.searchParams.get('download')==='1'||!['application/pdf','image/png','image/jpeg'].includes(metadata.mimeType)?'attachment':'inline';
         res.setHeader('Content-Disposition',`${disposition}; filename*=UTF-8''${encodeURIComponent(metadata.originalName).replaceAll("'",'%27')}`);return send(200,bytes,metadata.mimeType);
       }
+      const scheduleMatch=route.match(/^\/api\/events\/([^/]+)\/availability$/);
+      if(scheduleMatch&&req.method==='GET'){if(!['ADMIN','COMMERCIAL'].includes(user.role))fail(403,'Solo Marquee consulta recursos.');return send(200,{conflicts:scheduleConflicts(store.read(),store.event(store.read(),user,scheduleMatch[1]))});}
       let result;
-      if(route==='/api/venues-with-user'&&req.method==='POST'){admin(user);result=await hashTask(async()=>store.createVenueWithUser(user,await readJson(req)));}
+      if(route==='/api/import/preview'&&req.method==='POST'){admin(user);const data=await readJson(req,65*1024*1024);return send(200,require('./import').preview(store,user,data.archive));}
+      else if(route==='/api/import/confirm'&&req.method==='POST'){admin(user);result=require('./import').commit(store,user,await readJson(req,65*1024*1024),recovery);}
+      else if(route==='/api/mfa/setup'&&req.method==='POST'){rateLimit('mfa:'+user.id,10);const data=await readJson(req);result=await hashTask(()=>security.setup(user,data.currentPassword));}
+      else if(route==='/api/mfa/enable'&&req.method==='POST'){rateLimit('mfa:'+user.id,10);const data=await readJson(req);result=security.enable(user,data.code);const created=store.newSession(store.read().users.find(u=>u.id===user.id));res.setHeader('Set-Cookie',cookie(created.token));result.csrf=created.csrf;}
+      else if(route==='/api/mfa/disable'&&req.method==='POST'){rateLimit('mfa:'+user.id,10);await hashTask(async()=>security.disable(user,await readJson(req)));res.setHeader('Set-Cookie',cookie('',0));return send(200,{ok:true});}
+      else if(route.match(/^\/api\/venues\/[^/]+\/technical$/)&&req.method==='PATCH'){const data=await readJson(req);const venueId=route.split('/')[3];result=store.transaction(user,'TECHNICAL_PROFILE_UPDATED',state=>{const venue=state.venues.find(v=>v.id===venueId);if(!venue||!require('./store').canVenue(user,venueId))fail(404,'Espacio no encontrado.');const values=store.venueValues({...venue,technicalProfile:data.technicalProfile});venue.technicalProfile=values.technicalProfile;venue.technicalUpdatedAt=now();return venue;});}
+      else if(route==='/api/preferences'&&req.method==='PATCH')result=store.preferences(user,await readJson(req));
+      else if(route==='/api/drafts'&&req.method==='POST')result=store.saveDraft(user,null,await readJson(req));
+      else if(route.match(/^\/api\/drafts\/[^/]+$/)&&req.method==='PATCH')result=store.saveDraft(user,route.split('/').at(-1),await readJson(req));
+      else if(route.match(/^\/api\/events\/[^/]+\/message-draft$/)&&req.method==='POST')result=store.messageDraft(user,route.split('/')[3],await readJson(req));
+      else if(route.match(/^\/api\/events\/[^/]+\/budgets\/[^/]+\/decision$/)&&req.method==='POST'){result=store.budgetDecision(user,route.split('/')[3],route.split('/')[5],await readJson(req));if(result.decision==='REJECTED'){try{makeBackup('evento archivado');}catch{}}}
+      else if(route==='/api/clients/merge'&&req.method==='POST')result=store.mergeClients(user,await readJson(req));
+      else if(route==='/api/clients'&&req.method==='POST')result=store.saveClient(user,null,await readJson(req));
+      else if(route.match(/^\/api\/clients\/[^/]+$/)&&req.method==='PATCH')result=store.saveClient(user,route.split('/').at(-1),await readJson(req));
+      else if(route==='/api/organizations'&&req.method==='POST')result=store.saveOrganization(user,null,await readJson(req));
+      else if(route.match(/^\/api\/organizations\/[^/]+$/)&&req.method==='PATCH')result=store.saveOrganization(user,route.split('/').at(-1),await readJson(req));
+      else if(route==='/api/resources'&&req.method==='POST')result=store.saveResource(user,null,await readJson(req));
+      else if(route.match(/^\/api\/resources\/[^/]+$/)&&req.method==='PATCH')result=store.saveResource(user,route.split('/').at(-1),await readJson(req));
+      else if(route==='/api/views'&&req.method==='POST')result=store.saveView(user,await readJson(req));
+      else if(route==='/api/venues-with-user'&&req.method==='POST'){admin(user);result=await hashTask(async()=>store.createVenueWithUser(user,await readJson(req)));}
       else if(route==='/api/users'&&req.method==='POST'){admin(user);result=await hashTask(async()=>store.createUser(user,await readJson(req)));}
       else if(route.match(/^\/api\/users\/[^/]+$/)&&req.method==='PATCH'){admin(user);result=await hashTask(async()=>store.updateUser(user,route.split('/').at(-1),await readJson(req)));}
       else if(route==='/api/venues'&&req.method==='POST')result=store.saveVenue(user,null,await readJson(req));
@@ -140,16 +180,16 @@ function createPortal(options={}) {
     } catch(error) {
       const status=error.status||500;
       if(status===500)console.error('Error de operación del portal:',error.code||error.name);
-      if(!res.headersSent)send(status,{error:status===500?'No se pudo completar la operación. No se ha confirmado el guardado; vuelve a intentarlo.':error.message});else res.destroy();
+      if(!res.headersSent){let details=error.details;if(status===409){const match=req.url.match(/^\/api\/events\/([^/?]+)/);const cookieToken=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1);const currentSession=store.session(cookieToken);if(match&&currentSession){const current=store.view(currentSession.user).events.find(e=>e.id===match[1]);if(current)details={...details,current};}}send(status,{error:status===500?'No se pudo completar la operación. No se ha confirmado el guardado; vuelve a intentarlo.':error.message,details});}else res.destroy();
     }
-  });
+  }));
   server.requestTimeout=45000;server.headersTimeout=15000;server.maxRequestsPerSocket=1000;
-  server.on('close',()=>{if(backupTimer)clearInterval(backupTimer);store.close();});
-  return {server,store,origin};
+  server.on('close',()=>{if(backupTimer)clearInterval(backupTimer);if(mailTimer)clearInterval(mailTimer);store.close();});
+  return {server,store,origin,recovery,mailer,security};
 }
 function start() {
   const port=Number(process.env.PORT||3000);if(!Number.isInteger(port)||port<1||port>65535)throw new Error('PORT no válido.');
-  if(process.env.PORTAL_REDIRECT_URL){const destination=new URL(process.env.PORTAL_REDIRECT_URL);if(destination.protocol!=='https:')throw new Error('La redirección debe ser HTTPS.');const server=http.createServer((req,res)=>{if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify({status:'ok',version:'4.1.0-redirect'}));}res.writeHead(307,{Location:new URL(req.url,destination).href,'Cache-Control':'no-store'});res.end();});server.listen(port,'0.0.0.0');return;}
+  if(process.env.PORTAL_REDIRECT_URL){const destination=new URL(process.env.PORTAL_REDIRECT_URL);if(destination.protocol!=='https:')throw new Error('La redirección debe ser HTTPS.');const server=http.createServer((req,res)=>{if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify({status:'ok',version:'4.2.0-redirect'}));}res.writeHead(307,{Location:new URL(new URL(req.url,'http://secondary.invalid').pathname+new URL(req.url,'http://secondary.invalid').search,destination).href,'Cache-Control':'no-store'});res.end();});server.listen(port,'0.0.0.0');return;}
   const {server}=createPortal();server.listen(port,process.env.HOST||'0.0.0.0',()=>console.log('Marquee Flow: cuentas y datos persistentes, puerto '+port));
   for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),5000).unref();});
 }

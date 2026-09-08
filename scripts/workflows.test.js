@@ -1,0 +1,121 @@
+'use strict';
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const os=require('node:os');
+const path=require('node:path');
+const crypto=require('node:crypto');
+const {createPortal}=require('../portal/server');
+const {totp,base32}=require('../portal/security');
+const {clientAddress,sealed,unseal,putObject,verifyRecovery}=require('../portal/reliability');
+const {preview,commit}=require('../portal/import');
+async function fixture(t,additional={}){
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'marquee-workflows-'));
+  const env={APP_ORIGIN:'http://portal.test',DATA_DIR:directory,BOOTSTRAP_TOKEN:crypto.randomBytes(32).toString('hex'),PORTAL_SECRET_KEY:crypto.randomBytes(32).toString('base64'),...additional};
+  const sent=[];const portal=createPortal({env,noAutomaticBackup:true,noAutomaticMail:true,mailFetch:async(url,request)=>{sent.push({url,request,body:JSON.parse(request.body)});return {ok:true,json:async()=>({id:crypto.randomUUID()})};}});
+  await new Promise(resolve=>portal.server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+portal.server.address().port;
+  t.after(async()=>{await new Promise(resolve=>portal.server.close(resolve));fs.rmSync(directory,{recursive:true,force:true});});
+  const client=()=>({cookie:'',csrf:'',async request(route,method='GET',body,headers={}){const response=await fetch(base+'/api'+route,{method,headers:{Origin:env.APP_ORIGIN,'Content-Type':'application/json',Cookie:this.cookie,'X-CSRF-Token':this.csrf,...headers},body:body===undefined?undefined:JSON.stringify(body)});if(response.headers.get('set-cookie'))this.cookie=response.headers.get('set-cookie').split(';')[0];const data=await response.json();if(data.csrf)this.csrf=data.csrf;if(data.result?.csrf)this.csrf=data.result.csrf;return {status:response.status,data};}});
+  const ok=async(p,status=200)=>{const r=await p;assert.equal(r.status,status,JSON.stringify(r.data));return r.data;};
+  const a=client();await ok(a.request('/bootstrap','POST',{token:env.BOOTSTRAP_TOKEN,email:'info@marquee.es',firstName:'Admin',password:'admin-initial-2026'}),201);
+  async function space(name,address){const c=client(),result=await ok(a.request('/venues-with-user','POST',{venue:{name},user:{firstName:name,email:address}}));await ok(c.request('/login','POST',{email:address,password:result.result.temporaryPassword}));await ok(c.request('/password','POST',{currentPassword:result.result.temporaryPassword,password:'space-password-2026'}));return {...result.result,c};}
+  return {directory,env,portal,sent,client,ok,a,space,base};
+}
+test('Persistent drafts, duplicate retries, multiple spaces, client catalog and filtered exports',async t=>{
+  const {a,space,ok,portal}=await fixture(t);const one=await space('Uno','one@spaces.test'),two=await space('Dos','two@spaces.test');
+  const draft=(await ok(one.c.request('/drafts','POST',{values:{eventName:'Borrador incompleto',venueId:one.venue.id},step:1}))).result;
+  assert.equal((await one.c.request('/drafts/'+draft.id,'PATCH',{revision:0,values:{eventName:'stale'}})).status,409);
+  assert.equal((await two.c.request('/drafts/'+draft.id,'PATCH',{revision:draft.revision,values:{eventName:'intruso'}})).status,404);
+  const saved=(await ok(one.c.request('/drafts/'+draft.id,'PATCH',{revision:draft.revision,values:{eventName:'Evento Uno',venueId:one.venue.id,eventDate:'2027-11-10'}}))).result;
+  const body={...saved.values,draftId:saved.id,draftRevision:saved.revision},headers={'Idempotency-Key':crypto.randomUUID()};
+  const [first,retry]=await Promise.all([one.c.request('/events','POST',body,headers),one.c.request('/events','POST',body,headers)]);assert.equal(first.status,200);assert.equal(retry.status,200);assert.equal(first.data.result.id,retry.data.result.id);assert.equal(portal.store.read().events.length,1);
+  assert.equal((await one.c.request('/events','POST',{...body,eventName:'Changed'},headers)).status,409);
+  assert.equal((await ok(one.c.request('/state'))).data.drafts.length,0);
+  await ok(a.request('/users/'+one.user.id,'PATCH',{venueIds:[two.venue.id]}));await ok(one.c.request('/login','POST',{email:'one@spaces.test',password:'space-password-2026'}));
+  assert.equal((await ok(one.c.request('/state'))).data.venues.length,2);
+  const event=(await ok(one.c.request('/events','POST',{eventName:'Evento Dos',eventDate:'2027-12-12',venueId:two.venue.id,finalClient:'Empresa S.L.'}))).result;
+  assert.equal(event.venueId,two.venue.id);assert.ok(event.clientId);
+  const client=(await ok(one.c.request('/clients','POST',{name:'Empresa principal',venueId:two.venue.id,aliases:['EMPRESA PRINCIPAL SL']}))).result;
+  assert.equal((await one.c.request('/clients','POST',{name:'empresa principal sl',venueId:two.venue.id})).status,409);
+  await ok(one.c.request('/clients/merge','POST',{sourceId:event.clientId,targetId:client.id}));
+  assert.equal(portal.store.read().events.find(e=>e.id===event.id).clientId,client.id);
+  assert.ok(portal.store.read().clients.find(c=>c.id===event.clientId).mergedInto);
+  const current=portal.store.read().events.find(e=>e.id===event.id);await ok(a.request('/events/'+event.id,'PATCH',{status:'CANCELLED',closeReason:'Cambio de fechas',revision:current.revision}));
+  const exported=await ok(a.request('/export?status=CANCELLED&venue='+one.venue.id));assert.equal(exported.payload.events.length,0);assert.equal(exported.payload.venues.length,0);assert.equal(exported.payload.users.length,0);
+  const filtered=await ok(a.request('/export?status=CANCELLED&venue='+two.venue.id+'&q=Evento%20Dos'));assert.equal(filtered.payload.events.length,1);assert.equal(filtered.payload.venues.length,1);
+  await ok(one.c.request('/venues/'+two.venue.id+'/technical','PATCH',{technicalProfile:{power:'63 A',loadingHours:'08:00 a 12:00'}}));
+  assert.equal(portal.store.read().venues.find(v=>v.id===two.venue.id).technicalProfile.power,'63 A');
+  const third=await space('Tres','third@spaces.test');assert.equal((await third.c.request('/venues/'+two.venue.id+'/technical','PATCH',{technicalProfile:{power:'intruso'}})).status,404);
+});
+test('Version-bound budget decisions, monetary amounts, schedule conflicts and private messages',async t=>{
+  const {a,space,ok,portal}=await fixture(t);const one=await space('Uno','one@spaces.test'),two=await space('Dos','two@spaces.test');
+  const resource=(await ok(a.request('/resources','POST',{name:'Técnico principal',kind:'TEAM'}))).result;
+  const e=(await ok(one.c.request('/events','POST',{eventName:'Celebración',eventDate:'2027-10-20',estimatedStartTime:'18:00',estimatedEndTime:'22:00'}))).result;
+  await ok(a.request('/events/'+e.id,'PATCH',{resourceIds:[resource.id],setupMinutes:120,revision:e.revision}));
+  const pdf=Buffer.from('%PDF-1.4\n%%EOF'),upload=amount=>a.request('/events/'+e.id+'/files','POST',{kind:'budgets',status:'SENT',originalName:'Propuesta.pdf',base64:pdf.toString('base64'),amount});
+  const b1=(await ok(upload('1250.50'))).result,b2=(await ok(upload('1600'))).result;
+  assert.equal(b1.amountCents,125050);assert.match(b2.sha256,/^[a-f0-9]{64}$/);
+  let current=portal.store.read().events.find(x=>x.id===e.id);
+  assert.equal((await one.c.request('/events/'+e.id+'/budgets/'+b1.id+'/decision','POST',{decision:'ACCEPTED',revision:current.revision})).status,409);
+  await ok(one.c.request('/events/'+e.id+'/budgets/'+b2.id+'/decision','POST',{decision:'CHANGES_REQUESTED',reason:'Revisar iluminación',revision:current.revision}));
+  current=portal.store.read().events.find(x=>x.id===e.id);assert.equal(current.status,'NEGOTIATION');
+  await ok(one.c.request('/events/'+e.id+'/budgets/'+b2.id+'/decision','POST',{decision:'ACCEPTED',revision:current.revision}));
+  current=portal.store.read().events.find(x=>x.id===e.id);assert.equal(current.acceptedBudgetId,b2.id);assert.equal(current.acceptedAmountCents,160000);assert.equal(current.budgets[1].decisions[1].actorEmail,'one@spaces.test');
+  assert.equal((await one.c.request('/events/'+e.id+'/budgets/'+b2.id+'/decision','POST',{decision:'REJECTED',reason:'late',revision:current.revision})).status,409);
+  const other=(await ok(a.request('/events','POST',{eventName:'Private other space',venueId:two.venue.id,eventDate:'2027-10-20',estimatedStartTime:'15:00',estimatedEndTime:'17:00',resourceIds:[resource.id]}))).result;
+  let conflict=await a.request('/events/'+other.id,'PATCH',{status:'CONFIRMED',revision:other.revision});assert.equal(conflict.status,409);assert.equal(conflict.data.details.conflicts[0].eventName,'Celebración');
+  await ok(a.request('/events/'+other.id,'PATCH',{status:'CONFIRMED',revision:other.revision,conflictReason:'Se incorpora un técnico de refuerzo'}));
+  const messageHeaders={'Idempotency-Key':crypto.randomUUID()};await ok(one.c.request('/events/'+e.id+'/message-draft','POST',{body:'Mensaje pendiente'}));
+  await ok(one.c.request('/events/'+e.id+'/comments','POST',{body:'Mensaje definitivo'},messageHeaders));await ok(one.c.request('/events/'+e.id+'/comments','POST',{body:'Mensaje definitivo'},messageHeaders));
+  assert.equal(portal.store.read().events.find(x=>x.id===e.id).comments.length,1);assert.equal(portal.store.read().messageDrafts.length,0);
+  const thirdEvent=(await ok(one.c.request('/events','POST',{eventName:'Rechazado',eventDate:'2027-11-21'}))).result;
+  const b3=(await ok(a.request('/events/'+thirdEvent.id+'/files','POST',{kind:'budgets',status:'SENT',originalName:'Presupuesto.pdf',base64:pdf.toString('base64'),amount:100}))).result;
+  await ok(one.c.request('/events/'+thirdEvent.id+'/budgets/'+b3.id+'/decision','POST',{decision:'REJECTED',reason:'Sin presupuesto disponible',revision:portal.store.read().events.find(e=>e.id===thirdEvent.id).revision}));
+  assert.ok(portal.store.read().events.find(e=>e.id===thirdEvent.id).archivedAt);
+});
+test('Second factor, single-use recovery and durable email outbox',async t=>{
+  const {a,ok,portal,client,sent,space}=await fixture(t,{RESEND_API_KEY:'test-provider-key',MAIL_FROM:'Marquee <no-reply@example.test>'});
+  const setup=(await ok(a.request('/mfa/setup','POST',{currentPassword:'admin-initial-2026'}))).result;
+  const enabled=(await ok(a.request('/mfa/enable','POST',{code:totp(setup.secret)}))).result;assert.equal(enabled.recoveryCodes.length,10);
+  const publicState=(await ok(a.request('/state'))).data;assert.equal(publicState.users[0].mfaEnabled,true);assert.ok(!JSON.stringify(publicState).includes(setup.secret));assert.ok(!JSON.stringify(publicState).includes('mfaSecret'));
+  const other=client();assert.equal((await other.request('/login','POST',{email:'info@marquee.es',password:'admin-initial-2026'})).status,401);
+  await ok(other.request('/login','POST',{email:'info@marquee.es',password:'admin-initial-2026',code:enabled.recoveryCodes[0]}));
+  assert.equal((await client().request('/login','POST',{email:'info@marquee.es',password:'admin-initial-2026',code:enabled.recoveryCodes[0]})).status,401);
+  const anon=client();const absent=await ok(anon.request('/password/forgot','POST',{email:'absent@example.test'}));const present=await ok(anon.request('/password/forgot','POST',{email:'info@marquee.es'}));assert.deepEqual(absent,present);
+  await portal.mailer.flush();assert.equal(sent.length,1);assert.ok(sent[0].request.headers['Idempotency-Key']);assert.match(sent[0].body.text,/#reset=/);
+  const token=sent[0].body.text.match(/#reset=([A-Za-z0-9_-]+)/)[1];assert.ok(!JSON.stringify(portal.store.read()).includes(token));
+  assert.equal((await anon.request('/password/reset','POST',{token,password:'admin-reset-secret-2026'})).status,401);
+  await ok(anon.request('/password/reset','POST',{token,password:'admin-reset-secret-2026',code:enabled.recoveryCodes[1]}));
+  assert.equal((await anon.request('/password/reset','POST',{token,password:'repeat-password-2026',code:enabled.recoveryCodes[2]})).status,400);
+  assert.equal((await a.request('/state')).status,401);
+  await ok(a.request('/login','POST',{email:'info@marquee.es',password:'admin-reset-secret-2026',code:enabled.recoveryCodes[2]}));
+  const venue=await space('Uno','one@spaces.test');await ok(venue.c.request('/preferences','PATCH',{updates:false}));
+  const e=(await ok(venue.c.request('/events','POST',{eventName:'Aviso',eventDate:'2027-12-01'}))).result;
+  await portal.mailer.flush();assert.equal(sent.length,2);
+  await ok(a.request('/events/'+e.id,'PATCH',{eventName:'Cambio sin aviso',revision:e.revision}));await portal.mailer.flush();assert.equal(sent.length,2);
+});
+test('Backup encryption, isolated recovery, retention and trusted proxy address',async t=>{
+  const {portal,directory}=await fixture(t);const key=crypto.randomBytes(32),bytes=Buffer.from('private account material');const encoded=sealed(bytes,key);assert.ok(!encoded.includes(bytes));assert.deepEqual(unseal(encoded,key),bytes);assert.throws(()=>unseal(encoded,crypto.randomBytes(32)));
+  const backup=portal.recovery.make('manual',true),source=path.join(directory,'backups',backup.filename),target=path.join(directory,'recovery');const verified=verifyRecovery(source,target,backup.sha256);assert.equal(verified.users,1);assert.throws(()=>verifyRecovery(source,target,backup.sha256),/ya existe/);assert.throws(()=>verifyRecovery(source,path.join(directory,'bad'),'0'.repeat(64)),/huella/);
+  const req={headers:{'x-real-ip':'203.0.113.25','x-forwarded-for':'evil'},socket:{remoteAddress:'10.1.1.1'}};assert.equal(clientAddress(req,{}),'10.1.1.1');assert.equal(clientAddress(req,{RAILWAY_ENVIRONMENT_ID:'test',TRUST_RAILWAY_PROXY:'1'}),'203.0.113.25');
+  let signed;await putObject({BACKUP_S3_ENDPOINT:'https://objects.example.test',BACKUP_S3_BUCKET:'backups',BACKUP_S3_ACCESS_KEY:'test-key',BACKUP_S3_SECRET_KEY:'test-secret'},'marquee/test.sqlite.enc',encoded,async(url,options)=>{signed={url,options};return {ok:true};});assert.equal(signed.url.pathname,'/backups/marquee/test.sqlite.enc');assert.match(signed.options.headers.authorization,/AWS4-HMAC-SHA256/);assert.ok(!signed.options.headers.authorization.includes('test-secret'));
+  for(let i=0;i<12;i++)portal.recovery.make('arranque',true);portal.recovery.prune();assert.ok(portal.store.backups().some(b=>b.filename===backup.filename));assert.ok(portal.store.backups().length<13);assert.ok(portal.recovery.status().freeBytes>0);
+});
+test('Legacy import preview verifies hashes, keeps archives and skips duplicates',async t=>{
+  const {portal}=await fixture(t),user=portal.store.read().users[0];
+  const archive={format:'marquee-corporate-events-portable-backup',data:{venues:[{id:'old-venue',name:'Espacio antiguo'}],users:[],events:[{id:'old-event',venueId:'old-venue',eventName:'Evento histórico',eventDate:'2025-05-01',status:'CANCELLED',comments:[{body:'Mensaje conservado',createdAt:'2025-04-01T10:00:00Z'}],documents:[],budgets:[]}]},files:[]};archive.checksum=crypto.createHash('sha256').update(JSON.stringify({data:archive.data,files:archive.files})).digest('hex');
+  const plan=preview(portal.store,user,archive);assert.equal(plan.newEvents,1);assert.equal(portal.store.read().events.length,0);
+  assert.throws(()=>commit(portal.store,user,{archive,digest:'bad'},portal.recovery),{status:409});
+  const result=commit(portal.store,user,{archive,digest:plan.digest},portal.recovery);assert.equal(result.imported,1);const e=portal.store.read().events[0];assert.equal(e.status,'CANCELLED');assert.match(e.comments[0].body,/Mensaje conservado/);assert.equal(e.deletedAt,null);assert.ok(e.archivedAt);
+  assert.equal(preview(portal.store,user,archive).duplicates,1);assert.equal(preview(portal.store,user,archive).newEvents,0);assert.ok(portal.store.backups().length);
+  assert.throws(()=>preview(portal.store,user,{...archive,checksum:'tampered'}),{status:400});
+});
+
+test('PDF viewer assets load from the application while documents stay authenticated',async t=>{
+  const {base,client}=await fixture(t);
+  const viewer=await fetch(base+'/viewer?file=unknown');assert.equal(viewer.status,200);assert.match(await viewer.text(),/viewer.js/);assert.equal(viewer.headers.get('x-frame-options'),'SAMEORIGIN');
+  for(const asset of ['/viewer.js','/viewer.css','/pdfjs/build/pdf.mjs','/pdfjs/build/pdf.worker.mjs']){const response=await fetch(base+asset);assert.equal(response.status,200,asset);}
+  assert.equal((await client().request('/files/unknown')).status,401);
+  assert.equal((await fetch(base+'/pdfjs/package.json')).status,404);
+});

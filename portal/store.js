@@ -28,7 +28,9 @@ const CLOSED = ['NOT_ACCEPTED','CANCELLED','COMPLETED'];
 const STATUS_LABEL = {NEW_REQUEST:'Nueva petición',PENDING_REVIEW:'Pendiente de revisión',INFORMATION_PENDING:'Información pendiente',PREPARING_BUDGET:'Preparando presupuesto',BUDGET_SENT:'Presupuesto enviado',PENDING_RESPONSE:'Pendiente de respuesta',NEGOTIATION:'En negociación',CONFIRMED:'Confirmado',NOT_ACCEPTED:'No aceptado',CANCELLED:'Cancelado',COMPLETED:'Realizado'};
 const ops = user => ['ADMIN','COMMERCIAL'].includes(user.role);
 const admin = user => { if (user.role !== 'ADMIN') fail(403, 'Solo administración puede realizar esta acción.'); };
-const publicUser = user => { const {passwordHash, ...result} = user; return result; };
+const publicUser = user => { const {passwordHash, mfaSecret, mfaPending, recoveryCodes, ...result} = user; return {...result,mfaEnabled:Boolean(mfaSecret)}; };
+const venueIds = user => [...new Set([user.venueId,...(user.venueIds||[])].filter(Boolean))];
+const canVenue = (user, venueId) => ops(user) || venueIds(user).includes(venueId);
 async function passwordHash(password) {
   if (typeof password !== 'string' || password.length < 12 || password.length > 128) fail(400, 'La contraseña debe tener entre 12 y 128 caracteres.');
   const salt = crypto.randomBytes(16).toString('hex');
@@ -57,14 +59,14 @@ class Store {
     if (Object.values(this.db.prepare('PRAGMA quick_check').get())[0] !== 'ok') throw new Error('La base de datos no supera la verificación de integridad.');
     this.db.prepare('DELETE FROM sessions WHERE expires < ?').run(Date.now());
   }
-  read() { return JSON.parse(this.db.prepare('SELECT value FROM state WHERE id=1').get().value); }
+  read() { const state=JSON.parse(this.db.prepare('SELECT value FROM state WHERE id=1').get().value); for(const key of ['clients','drafts','messageDrafts','resources','organizations','savedViews','outbox','resets'])state[key] ||= []; return state; }
   transaction(actor, action, fn) {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const state = this.read();
       if (actor) {
         const current = state.users.find(u=>u.id===actor.id && u.active);
-        if (!current || current.role!==actor.role || current.venueId!==actor.venueId) fail(401,'Tu acceso ha cambiado. Vuelve a entrar.');
+        if (!current || current.role!==actor.role || JSON.stringify(venueIds(current))!==JSON.stringify(venueIds(actor))) fail(401,'Tu acceso ha cambiado. Vuelve a entrar.');
       }
       const result = fn(state);
       state.revision++;
@@ -81,7 +83,7 @@ class Store {
     if (!session) return null;
     const state = this.read();
     const user = state.users.find(u=>u.id===session.userId && u.active);
-    if (!user || (user.role==='VENUE_USER' && !state.venues.some(v=>v.id===user.venueId && v.state==='ACTIVE'))) return null;
+    if (!user || (user.role==='VENUE_USER' && !state.venues.some(v=>canVenue(user,v.id) && v.state==='ACTIVE'))) return null;
     return {...session,user};
   }
   newSession(user) {
@@ -94,17 +96,17 @@ class Store {
   revoke(userId) { this.db.prepare('DELETE FROM sessions WHERE userId=?').run(userId); }
   view(user) {
     const state = this.read();
-    state.users = state.users.filter(u=>ops(user) || u.id===user.id || u.venueId===user.venueId || (ops(u) && state.settings.showCommercialToVenue)).map(u=> {
+    state.users = state.users.filter(u=>ops(user) || u.id===user.id || venueIds(u).some(v=>canVenue(user,v)) || (ops(u) && state.settings.showCommercialToVenue)).map(u=> {
       const safe = publicUser(u);
-      if (!ops(user) && u.id!==user.id) return {id:u.id,firstName:u.firstName,lastName:u.lastName,role:u.role,active:u.active,venueId:u.venueId,email:u.venueId===user.venueId ? u.email : ''};
+      if (!ops(user) && u.id!==user.id) return {id:u.id,firstName:u.firstName,lastName:u.lastName,role:u.role,active:u.active,venueId:u.venueId,email:venueIds(u).some(v=>canVenue(user,v)) ? u.email : ''};
       return safe;
     });
-    state.venues = state.venues.filter(v=>ops(user) || v.id===user.venueId);
-    state.events = state.events.filter(e=>ops(user) || e.venueId===user.venueId);
+    state.venues = state.venues.filter(v=>ops(user) || canVenue(user,v.id));
+    state.events = state.events.filter(e=>ops(user) || canVenue(user,e.venueId));
     if (!ops(user)) state.events = state.events.map(event=> {
       event.internalNotes=[];
       event.history=event.history.filter(h=>!h.internal);
-      event.budgets=event.budgets.filter(b=>['SENT','FINAL'].includes(b.status));
+      event.budgets=event.budgets.filter(b=>['SENT','FINAL','ARCHIVED'].includes(b.status));
       event.documents=event.documents.filter(d=>d.visibility==='SHARED');
       event.tasks=event.tasks.filter(t=>t.assignedTo==='VENUE');
       event.infoRequests=event.infoRequests.filter(t=>t.assignedTo==='VENUE');
@@ -112,13 +114,20 @@ class Store {
       return event;
     });
     state.notifications=state.notifications.filter(n=>n.recipientId===user.id);
+    state.clients=state.clients.filter(c=>canVenue(user,c.venueId));
+    state.drafts=state.drafts.filter(d=>d.userId===user.id && !d.submittedEventId && canVenue(user,d.values.venueId||user.venueId));
+    state.messageDrafts=state.messageDrafts.filter(d=>d.userId===user.id && state.events.some(e=>e.id===d.eventId));
+    state.savedViews=state.savedViews.filter(v=>v.userId===user.id);
+    state.organizations=state.organizations.filter(o=>ops(user)||state.venues.some(v=>v.organizationId===o.id));
+    if(!ops(user))state.resources=[];
+    delete state.outbox; delete state.resets;
     if (user.role!=='ADMIN') state.audit=[];
     return state;
   }
   venue(state, venueId) { const venue=state.venues.find(v=>v.id===venueId); if (!venue || venue.state!=='ACTIVE') fail(400,'Selecciona un espacio de eventos activo.'); return venue; }
   event(state, user, eventId, revision) {
     const event=state.events.find(e=>e.id===eventId);
-    if (!event || (!ops(user) && event.venueId!==user.venueId)) fail(404,'Evento no encontrado.');
+    if (!event || (!ops(user) && !canVenue(user,event.venueId))) fail(404,'Evento no encontrado.');
     if (revision!==undefined && revision!==event.revision) fail(409,'Otra persona ha actualizado el evento. Revisa los cambios antes de guardar.');
     return event;
   }
@@ -127,12 +136,12 @@ class Store {
     event.updatedAt=now(); event.revision++;
   }
   notify(state,event,user,title,body, type='EVENT_UPDATED') {
-    for (const recipient of state.users.filter(u=>u.active && u.id!==user.id && (ops(user) ? u.venueId===event.venueId : ops(u)))) {
+    for (const recipient of state.users.filter(u=>u.active && u.id!==user.id && (ops(user) ? canVenue(u,event.venueId) && u.role==='VENUE_USER' : ops(u)))) {
       state.notifications.unshift({id:id(),recipientId:recipient.id,eventId:event.id,type,title,body,createdAt:now(),readAt:null});
     }
   }
   venueValues(data) {
-    return {name:text(data.name,200,true),address:text(data.address),municipality:text(data.municipality,150),province:text(data.province,150),contactName:text(data.contactName,200),phone:text(data.phone,60),email:data.email ? email(data.email) : '',observations:text(data.observations,10000),state:choice(data.state||'ACTIVE',['ACTIVE','INACTIVE']),technicalProfile:data.technicalProfile||{}};
+    return {name:text(data.name,200,true),address:text(data.address),municipality:text(data.municipality,150),province:text(data.province,150),contactName:text(data.contactName,200),phone:text(data.phone,60),email:data.email ? email(data.email) : '',observations:text(data.observations,10000),state:choice(data.state||'ACTIVE',['ACTIVE','INACTIVE']),technicalProfile:Object.fromEntries(['spaces','loadingAccess','loadingHours','power','soundRestrictions','ceilingHeight','wifi','stage','parking','plans','contacts','restrictions'].map(k=>[k,text(data.technicalProfile?.[k],10000)])),technicalUpdatedAt:now(),organizationId:text(data.organizationId,100)};
   }
   async prepareUser(data) {
     const temporaryPassword=data.password || crypto.randomBytes(18).toString('base64url');
@@ -142,8 +151,9 @@ class Store {
     const normalized=email(data.email);
     if (state.users.some(u=>u.email===normalized)) fail(409,'Ese email ya tiene una cuenta.');
     const role=choice(data.role||'VENUE_USER',['ADMIN','COMMERCIAL','VENUE_USER']);
-    if (role==='VENUE_USER') this.venue(state,venueId||data.venueId);
-    const user={id:id(),firstName:text(data.firstName,100,true),lastName:text(data.lastName,150),email:normalized,role,venueId:role==='VENUE_USER' ? venueId||data.venueId : null,active:true,mustChangePassword:true,passwordHash:prepared.hash,createdAt:now()};
+    const access=role==='VENUE_USER'?[...new Set([venueId||data.venueId,...(Array.isArray(data.venueIds)?data.venueIds:[])].filter(Boolean))]:[];
+    if(role==='VENUE_USER'&&!access.length)fail(400,'Asigna al menos un espacio de eventos.');for(const v of access)this.venue(state,v);
+    const user={id:id(),firstName:text(data.firstName,100,true),lastName:text(data.lastName,150),email:normalized,role,venueId:role==='VENUE_USER' ? venueId||data.venueId : null,venueIds:access,active:true,mustChangePassword:true,passwordHash:prepared.hash,createdAt:now()};
     state.users.push(user); return user;
   }
   async createUser(actor,data) {
@@ -176,14 +186,14 @@ class Store {
     const hash=data.password ? await passwordHash(data.password) : null;
     return this.transaction(actor,'USER_UPDATED',state=> {
       const user=state.users.find(u=>u.id===userId); if (!user) fail(404,'Usuario no encontrado.');
-      if(user.protectedAccount && (data.active===false || (data.role&&data.role!=='ADMIN') || (data.email&&email(data.email)!==user.email) || data.venueId || (hash&&actor.id!==user.id)))fail(403,'La cuenta de administración protegida no se puede desactivar, reasignar ni cambiar desde otra cuenta.');
+      if(user.protectedAccount && (data.active===false || (data.role&&data.role!=='ADMIN') || (data.email&&email(data.email)!==user.email) || data.venueId || data.venueIds?.length || (hash&&actor.id!==user.id)))fail(403,'La cuenta de administración protegida no se puede desactivar, reasignar ni cambiar desde otra cuenta.');
       const role=choice(data.role||user.role,['ADMIN','COMMERCIAL','VENUE_USER']);
       const active=data.active===undefined ? user.active : data.active===true;
       if (user.id===actor.id && (!active || role!=='ADMIN')) fail(400,'No puedes desactivar ni quitar permisos a tu propia cuenta.');
-      if (role==='VENUE_USER') this.venue(state,data.venueId||user.venueId);
+      const access=role==='VENUE_USER'?[...new Set([data.venueId||user.venueId,...(Array.isArray(data.venueIds)?data.venueIds:venueIds(user))].filter(Boolean))]:[];for(const v of access)this.venue(state,v);if(role==='VENUE_USER'&&!access.length)fail(400,'Asigna un espacio.');
       const normalized=data.email===undefined ? user.email : email(data.email);
       if (state.users.some(u=>u.email===normalized && u.id!==userId)) fail(409,'Ese email ya tiene una cuenta.');
-      Object.assign(user,{role,active,email:normalized,venueId:role==='VENUE_USER' ? data.venueId||user.venueId : null});
+      Object.assign(user,{role,active,email:normalized,venueIds:access,venueId:role==='VENUE_USER' ? data.venueId||user.venueId : null});
       if (data.firstName!==undefined) user.firstName=text(data.firstName,100,true);
       if (data.lastName!==undefined) user.lastName=text(data.lastName,150);
       if (hash) {user.passwordHash=hash;user.mustChangePassword=true;}
@@ -195,7 +205,7 @@ class Store {
     admin(actor);
     return this.transaction(actor,'VENUE_UPDATED',state=> {
       if (!venueId) {const venue={id:id(),...this.venueValues(data),createdAt:now()}; state.venues.push(venue); return venue;}
-      const venue=state.venues.find(v=>v.id===venueId); if (!venue) fail(404,'Finca no encontrada.');
+      const venue=state.venues.find(v=>v.id===venueId); if (!venue) fail(404,'Espacio de eventos no encontrado.');
       Object.assign(venue,this.venueValues({...venue,...data}));
       if (venue.state==='INACTIVE') for(const user of state.users.filter(u=>u.venueId===venueId)) this.revoke(user.id);
       return venue;
@@ -213,13 +223,19 @@ class Store {
   }
   createEvent(user,data) {
     return this.transaction(user,'EVENT_CREATED',state=> {
-      const venueId=ops(user) ? data.venueId : user.venueId;
-      if (!ops(user) && data.venueId && data.venueId!==venueId) fail(403,'No puedes crear peticiones para otro espacio de eventos.');
+      const venueId=data.venueId||user.venueId;
+      if (!canVenue(user,venueId)) fail(403,'No puedes crear peticiones para otro espacio de eventos.');
       this.venue(state,venueId);
+      const draft=data.draftId?state.drafts.find(d=>d.id===data.draftId&&d.userId===user.id):null;
+      if(data.draftId&&!draft)fail(404,'Borrador no encontrado.');
+      if(draft?.submittedEventId)return this.event(state,user,draft.submittedEventId);
+      if(draft && draft.revision!==data.draftRevision)fail(409,'El borrador ha cambiado en otro dispositivo.');
       const values=this.eventValues(data);
       if (!values.eventName || !values.eventDate) fail(400,'Indica el nombre y la fecha del evento.');
       const event={id:id(),venueId,...this.eventValues({contactFirstName:'',contactLastName:'',agency:'',finalClient:'',email:'',phone:'',audiovisualRequest:'',technicalRequirements:'',observations:'',estimatedStartTime:'',estimatedEndTime:'',numberOfPeople:null}),...values,status:'NEW_REQUEST',priority:choice(data.priority||'NORMAL',['LOW','NORMAL','HIGH','URGENT','VERY_URGENT']),createdById:user.id,assignedCommercialId:state.users.find(u=>u.active&&u.role==='COMMERCIAL')?.id||null,createdAt:now(),updatedAt:now(),revision:0,deletedAt:null,archivedAt:null,budgets:[],documents:[],comments:[],internalNotes:[],history:[],tasks:[],infoRequests:[],readBy:[],operationalTimes:{},waitingOn:'MARQUEE',nextAction:'Revisar nueva petición',nextActionDue:values.eventDate};
       this.history(event,user,'Se creó la petición de presupuesto','CREATED');
+      this.applyEventExtras(state,user,event,data);
+      if(draft)draft.submittedEventId=event.id;
       state.events.unshift(event);this.notify(state,event,user,'Nueva petición recibida',event.eventName,'NEW_REQUEST');return event;
     });
   }
@@ -229,13 +245,16 @@ class Store {
       if (!ops(user) && CLOSED.includes(event.status)) fail(403,'El evento está archivado. Solicita a Marquee su reapertura.');
       const protectedKeys=['status','priority','assignedCommercialId','nextAction','nextActionDue','waitingOn','operationalTimes'];
       if (!ops(user) && protectedKeys.some(k=>k in data)) fail(403,'Solo Marquee puede modificar la gestión del evento.');
-      if (data.venueId && data.venueId!==event.venueId) {if(!ops(user))fail(403,'No puedes cambiar de espacio de eventos.');this.venue(state,data.venueId);event.venueId=data.venueId;}
+      if (data.venueId && data.venueId!==event.venueId) {if(!canVenue(user,data.venueId))fail(403,'No puedes cambiar de espacio de eventos.');this.venue(state,data.venueId);event.venueId=data.venueId;}
       Object.assign(event,this.eventValues(data));
+      this.applyEventExtras(state,user,event,data);
+      if((data.status==='CONFIRMED'&&data.status!==event.status)||(event.status==='CONFIRMED'&&['eventDate','estimatedStartTime','estimatedEndTime','setupMinutes','dismantleMinutes','room','resourceIds','venueId'].some(k=>k in data)))this.checkSchedule(state,event,data,user);
       if ('status' in data) {
         const previous=event.status; const status=choice(data.status,STATUSES);
         if(CLOSED.includes(previous) && !CLOSED.includes(status)) admin(user);
+        if(['CANCELLED','NOT_ACCEPTED'].includes(status)&&data.closeReason!==undefined)event.closeReason=text(data.closeReason,3000,true);
         event.status=status; event.archivedAt=CLOSED.includes(status)?event.archivedAt||now():null;
-        if (['CONFIRMED','COMPLETED'].includes(status)) event.acceptedAt=event.acceptedAt||now();
+        if (['CONFIRMED','COMPLETED'].includes(status)) {event.acceptedAt=event.acceptedAt||now();const budget=event.budgets.find(b=>b.isCurrent&&b.status!=='DRAFT');if(budget&&!event.acceptedBudgetId){event.acceptedBudgetId=budget.id;event.acceptedAmountCents=budget.amountCents;(budget.decisions||=[]).push({id:id(),decision:'ACCEPTED',reason:'Confirmación registrada por Marquee',actorId:user.id,actorName:[user.firstName,user.lastName].filter(Boolean).join(' '),actorEmail:user.email,createdAt:now(),version:budget.version,fileSha256:budget.sha256});}}
         if (status==='COMPLETED') event.completedAt=now();
         if (status==='CANCELLED') event.cancelledAt=now();
         if (status==='BUDGET_SENT') event.budgetSentAt=event.budgetSentAt||now();
@@ -258,6 +277,7 @@ class Store {
       const comment={id:id(),authorId:user.id,body:text(data.body,20000,true),createdAt:now()};
       event[data.internal?'internalNotes':'comments'].push(comment);
       this.history(event,user,data.internal?'Se añadió una nota interna':'Se añadió un mensaje compartido',data.internal?'INTERNAL_NOTE_ADDED':'COMMENT_ADDED',Boolean(data.internal));
+      if(!data.internal)state.messageDrafts=state.messageDrafts.filter(d=>d.userId!==user.id||d.eventId!==event.id);
       if(!data.internal)this.notify(state,event,user,'Nuevo mensaje',comment.body.slice(0,150),'NEW_COMMENT');return comment;
     });
   }
@@ -283,8 +303,8 @@ class Store {
       const event=this.event(state,user,eventId,data.revision);
       const kind=choice(data.kind,['budgets','documents']);
       const file={id:id(),fileKey:id(),originalName:text(data.originalName,200,true),displayName:text(data.displayName||data.originalName,200,true),description:text(data.description,10000),mimeType:data.mimeType,sizeBytes:bytes.length,uploadedById:user.id,createdAt:now(),viewedBy:[],downloadedBy:[]};
-      if(kind==='budgets') {file.version=Math.max(0,...event.budgets.map(b=>b.version))+1;file.status=choice(data.status||'SENT',['DRAFT','SENT','FINAL']);file.isCurrent=file.status!=='DRAFT'; if(file.isCurrent)event.budgets.forEach(b=>b.isCurrent=false);}
-      if(kind==='budgets' && file.status!=='DRAFT')event.budgetSentAt=event.budgetSentAt||now();
+      if(kind==='budgets') {file.amountCents=data.amount===''||data.amount===undefined?null:Math.round(Number(data.amount)*100);if(file.amountCents!==null&&(!Number.isSafeInteger(file.amountCents)||file.amountCents<0||file.amountCents>10000000000))fail(400,'Importe no válido.');file.currency='EUR';file.validUntil=date(data.validUntil);file.sha256=crypto.createHash('sha256').update(bytes).digest('hex');file.version=Math.max(0,...event.budgets.map(b=>b.version))+1;file.status=choice(data.status||'SENT',['DRAFT','SENT','FINAL']);file.isCurrent=file.status!=='DRAFT'; if(file.isCurrent)event.budgets.forEach(b=>b.isCurrent=false);}
+      if(kind==='budgets' && file.status!=='DRAFT'){event.budgetSentAt=event.budgetSentAt||now();if(!['CONFIRMED',...CLOSED].includes(event.status)){event.status='BUDGET_SENT';event.waitingOn='VENUE';event.nextAction='Revisar presupuesto V'+file.version;}}
       else {file.visibility=ops(user)?choice(data.visibility||'SHARED',['SHARED','INTERNAL']):'SHARED';}
       this.db.prepare('INSERT INTO files VALUES (?,?,?)').run(file.fileKey,eventId,bytes);event[kind].push(file);
       const internal=file.visibility==='INTERNAL'||file.status==='DRAFT';
@@ -328,4 +348,6 @@ class Store {
   }
   close(){this.db.close();}
 }
-module.exports={Store,fail,id,now,email,text,date,choice,ops,admin,publicUser,passwordHash,verifyPassword,emptyState,STATUSES,CLOSED,PROTECTED_ADMIN_EMAIL};
+module.exports={venueIds,canVenue,Store,fail,id,now,email,text,date,choice,ops,admin,publicUser,passwordHash,verifyPassword,emptyState,STATUSES,CLOSED,PROTECTED_ADMIN_EMAIL};
+
+require('./workflow-store').install(Store);

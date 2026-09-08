@@ -2,7 +2,7 @@
 const vm=require('node:vm');
 const fs=require('node:fs');
 const path=require('node:path');
-for(const name of ['store','server','template'])new vm.Script(fs.readFileSync(path.join(__dirname,'../portal/'+name+'.js'),'utf8'));
+for(const name of ['store','server','template','workflow-store','reliability','security','mail','import'])new vm.Script(fs.readFileSync(path.join(__dirname,'../portal/'+name+'.js'),'utf8'));
 const html=require('../portal/template').buildPortal();
 for(const match of html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi))new vm.Script(match[1]);
 if(/localStorage/.test(html))throw new Error('El portal no debe guardar datos privados en localStorage.');
