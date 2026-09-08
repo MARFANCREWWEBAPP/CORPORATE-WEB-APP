@@ -2,6 +2,16 @@
 
 Aplicación interna de Marquee para probar la gestión de peticiones de eventos corporativos entre fincas, comerciales y administración.
 
+## Rama preparada para Railway
+
+La rama estable de despliegue es:
+
+```text
+railway-demo
+```
+
+Esta rama evita mezclar la demo publicada con cambios de desarrollo y está preparada para arrancar mediante `npm start`.
+
 ## Estado de esta entrega
 
 Esta rama contiene una **demo funcional para revisión de diseño, navegación y flujo de trabajo**. Los datos se guardan en `localStorage`, por lo que cada navegador mantiene su propia copia y todavía no existe sincronización multiusuario real.
@@ -20,12 +30,13 @@ El servidor escucha en `0.0.0.0` y utiliza automáticamente la variable `PORT` p
 ## Desplegar en Railway
 
 1. Crear un proyecto nuevo con **Deploy from GitHub repo**.
-2. Elegir `MARFANCREWWEBAPP/CORPORATE-WEB-APP` y la rama `main`.
-3. Añadir las variables de entorno indicadas abajo.
-4. Configurar `/health` como healthcheck.
-5. Generar un dominio desde **Settings → Networking**.
+2. Elegir `MARFANCREWWEBAPP/CORPORATE-WEB-APP`.
+3. Seleccionar la rama `railway-demo` como fuente del servicio.
+4. Añadir las variables de entorno indicadas abajo.
+5. Configurar `/health` como healthcheck.
+6. Generar un dominio desde **Settings → Networking**.
 
-Railway detectará el script `npm start` definido en `package.json`. Los nuevos commits a `main` podrán activar despliegues automáticos cuando el repositorio quede conectado.
+Railway detectará el script `npm start` definido en `package.json`. Los nuevos commits a `railway-demo` podrán activar despliegues automáticos cuando el repositorio quede conectado.
 
 ## Variables recomendadas en Railway
 
