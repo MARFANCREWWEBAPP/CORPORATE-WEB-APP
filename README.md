@@ -1,4 +1,4 @@
-# Marquee Flow V4 · Entorno de demostración
+# Marquee Flow V4 · Demo interna
 
 Aplicación interna de Marquee para probar la gestión de peticiones de eventos corporativos entre fincas, comerciales y administración.
 
@@ -32,6 +32,10 @@ La protección HTTP externa solo se activa cuando están configuradas las dos va
 ```text
 /health
 ```
+
+## Empaquetado de la demo
+
+Para evitar límites de subida del conector, `index.html` se almacena comprimido con Brotli y dividido en varias partes dentro de `app-payload/`. `server.js` recompone y descomprime el contenido en memoria al arrancar. La experiencia web es idéntica a la demo HTML original.
 
 ## Accesos internos de demostración
 
