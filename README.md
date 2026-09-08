@@ -38,3 +38,5 @@ Estado detallado, límites y criterios de uso: [DEMO_OPERATIVA.md](DEMO_OPERATIV
 `index.html` conserva los **812095 bytes** aprobados y SHA-256 `e7b2f81b2a26010b8c96d3450349f5b4caa2b7430e2732be93ca8cf4c1e93472`. La aplicación adapta esa plantilla al servirla. `npm run start:original` mantiene el arranque histórico, con sus condiciones de protección HTTP. No se han eliminado las ramas ni los archivos de respaldo existentes.
 
 Consultar [RESTORE_V4_ORIGINAL.md](RESTORE_V4_ORIGINAL.md), [AUDITORIA_V4_1.md](AUDITORIA_V4_1.md) y [IMPLEMENTACION_AUDITORIA.md](IMPLEMENTACION_AUDITORIA.md) para el registro histórico. Las descripciones de entregas anteriores no sustituyen el estado actual de esta demo.
+
+Administración dispone de **Configuración → Borrar eventos y usuarios demo**. Muestra el alcance, exige escribir `BORRAR DEMO` y crea una copia íntegra antes de borrar. Conserva el acceso administrador y las copias anteriores. Los tres perfiles iniciales solo desaparecen cuando administración ejecuta la limpieza; el despliegue no la ejecuta automáticamente.

@@ -44,7 +44,7 @@ La cuenta privada protegida `info@marquee.es` permanece fuera de la demo públic
 - Móvil: login de los tres perfiles, formulario de petición, navegación operativa y visor comprobados. El chat conserva el ajuste adaptable de la auditoría.
 - Rendimiento: búsqueda y filtros locales sobre la vista autorizada; actualización del servidor sin sustituir formularios en edición. Falta ensayo de carga y medición en móviles y redes reales; no se declara cumplido un SLA.
 
-Validación automatizada: **19 pruebas**, que cubren arranque original, autenticación, permisos, archivos, archivo/reapertura, concurrencia, borradores, importación, PDF, segundo factor, correo con transporte de prueba, copias y restauración, demo, reglas, SSE, firma simple, calendario, adaptadores externos simulados y PostgreSQL. Se verifica el hash original y la sintaxis del HTML generado. Las dependencias se fijan mediante lockfile.
+Validación automatizada: **21 pruebas**, que cubren arranque original, autenticación, permisos, archivos, archivo/reapertura, concurrencia, borradores, importación, PDF, segundo factor, correo con transporte de prueba, copias y restauración, demo, reglas, SSE, firma simple, calendario, adaptadores externos simulados y PostgreSQL. Se verifica el hash original y la sintaxis del HTML generado. Las dependencias se fijan mediante lockfile.
 
 ## Activación privada pendiente
 
@@ -64,3 +64,13 @@ No se han contratado servicios, creado recursos de pago ni enviado mensajes real
 - [WhatsApp: mensajes de plantilla](https://whatsapp.github.io/WhatsApp-Nodejs-SDK/api-reference/messages/template/).
 - [OpenAI: generación de texto](https://developers.openai.com/api/docs/guides/text).
 - [Google: suscripción desde URL](https://support.google.com/calendar/answer/37100?hl=en-uk) y [Outlook: importar o suscribirse](https://support.microsoft.com/es-es/outlook/import-or-subscribe-to-a-calendar-in-outlook-com-or-outlook-on-the-web).
+
+## Limpieza de la demo desde administración
+
+En **Configuración → Limpiar datos de demostración → Borrar eventos y usuarios demo**, administración puede revisar el número y la lista de eventos y cuentas afectados. Es necesario escribir **BORRAR DEMO** y pulsar **Crear copia y borrar demo**.
+
+La operación solo está disponible en la base aislada de demostración. Incluye todos sus eventos, cancelados y realizados, archivos, mensajes, borradores y avisos, y sus usuarios de prueba. Conserva la cuenta que realiza la operación, el administrador de acceso a la demo y cualquier administrador protegido, además de espacios, clientes, recursos, ajustes, auditoría y copias anteriores. El portal privado no dispone de esta operación.
+
+Antes de borrar se crea una copia completa con comprobación de integridad y SHA-256. Si la copia falla, no se borra nada. Una revisión desactualizada exige volver a revisar. Se revocan las sesiones de las cuentas eliminadas, se retiran sus perfiles del acceso y no se recrean al reiniciar la misma base. Reemplazar una instancia demo sin volumen puede volver a inicializar las muestras. Limpiar la demo no la convierte en un entorno privado ni activa almacenamiento de producción.
+
+La entrega publica el botón disponible, sin ejecutarlo sobre la demo pública: los tres perfiles iniciales se mantienen hasta que administración decida realizar la limpieza.

@@ -49,3 +49,38 @@ test('Demo refuses existing private data and can run on Railway without real-ser
     const portal=createPortal({env:{DEMO_MODE:'1',NODE_ENV:'production',RAILWAY_ENVIRONMENT_ID:'sample',APP_ORIGIN:'https://demo.example.test',DATA_DIR:demoDir},noAutomaticBackup:true,noAutomaticMail:true});assert.equal(portal.store.read().users.length,3);portal.store.close();
   }finally{fs.rmSync(privateDir,{recursive:true,force:true});fs.rmSync(demoDir,{recursive:true,force:true});}
 });
+
+test('Admin demo cleanup requires review, backs up all records, preserves access and survives restart',async t=>{
+  const crypto=require('node:crypto'),{DatabaseSync}=require('node:sqlite');
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'marquee-cleanup-test-'));
+  const env={DEMO_MODE:'1',APP_ORIGIN:'http://demo.test',DATA_DIR:directory};
+  let portal=createPortal({env,noAutomaticBackup:true,noAutomaticMail:true}),base;
+  async function listen(){await new Promise(resolve=>portal.server.listen(0,'127.0.0.1',resolve));base='http://127.0.0.1:'+portal.server.address().port;}
+  await listen();t.after(async()=>{portal.closeStreams();await new Promise(resolve=>portal.server.close(resolve));fs.rmSync(directory,{recursive:true,force:true});});
+  const client=()=>({cookie:'',csrf:'',async request(route,method='GET',body){const response=await fetch(base+'/api'+route,{method,headers:{Origin:env.APP_ORIGIN,'Content-Type':'application/json',Cookie:this.cookie,'X-CSRF-Token':this.csrf},body:body===undefined?undefined:JSON.stringify(body)});if(response.headers.get('set-cookie'))this.cookie=response.headers.get('set-cookie').split(';')[0];const data=await response.json();if(data.csrf)this.csrf=data.csrf;return {status:response.status,data};}});
+  const admin=client(),commercial=client();assert.equal((await admin.request('/login','POST',{email:accounts[0].email,password})).status,200);await commercial.request('/login','POST',{email:accounts[1].email,password});
+  assert.equal((await client().request('/demo/cleanup')).status,401);
+  assert.equal((await commercial.request('/demo/cleanup')).status,403);
+  assert.equal((await commercial.request('/demo/cleanup','POST',{confirmation:'BORRAR DEMO'})).status,403);
+  await portal.store.provisionProtectedAdmin('protected-test-password-2026');
+  const extra=await admin.request('/users','POST',{email:'new-test@example.test',firstName:'Prueba adicional',role:'COMMERCIAL'});assert.equal(extra.status,200);
+  const first=await admin.request('/demo/cleanup');assert.equal(first.data.events.length,6);assert.equal(first.data.users.length,3);assert.equal(first.data.files,5);assert.ok(first.data.preserved.some(u=>u.email==='info@marquee.es'));
+  assert.equal((await admin.request('/demo/cleanup','POST',{digest:first.data.digest,confirmation:'no'})).status,409);assert.equal(portal.store.backups().length,0);
+  const user=portal.store.read().users.find(u=>u.email===accounts[0].email);portal.store.transaction(user,'TEST_EDIT',state=>state.events[0].eventName='Cambio después de revisar');
+  assert.equal((await admin.request('/demo/cleanup','POST',{digest:first.data.digest,confirmation:'BORRAR DEMO'})).status,409);
+  const plan=(await admin.request('/demo/cleanup')).data,before=portal.store.read(),make=portal.recovery.make;
+  portal.recovery.make=()=>{throw new Error('disk full');};assert.equal((await admin.request('/demo/cleanup','POST',{digest:plan.digest,confirmation:'BORRAR DEMO'})).status,500);assert.deepEqual(portal.store.read(),before);portal.recovery.make=make;
+  const result=await admin.request('/demo/cleanup','POST',{digest:plan.digest,confirmation:'BORRAR DEMO'});assert.equal(result.status,200,JSON.stringify(result.data));assert.equal(result.data.result.removedEvents,6);assert.equal(result.data.result.removedUsers,3);assert.equal(result.data.result.removedFiles,5);
+  assert.equal(portal.store.read().events.length,0);assert.equal(portal.store.read().users.length,2);assert.equal(portal.store.read().venues.length,2);assert.equal(portal.store.db.prepare('SELECT COUNT(*) AS n FROM files').get().n,0);assert.ok(portal.store.read().audit.some(a=>a.action==='DEMO_DATA_CLEANED'));
+  assert.equal((await commercial.request('/state')).status,401);assert.equal((await admin.request('/state')).status,200);
+  assert.equal((await client().request('/login','POST',{email:accounts[2].email,password})).status,401);assert.equal((await client().request('/session')).data.demo.accounts.length,1);
+  const snapshot=path.join(directory,'backups',result.data.result.backup.filename);assert.equal(crypto.createHash('sha256').update(fs.readFileSync(snapshot)).digest('hex'),result.data.result.backup.sha256);
+  const backup=new DatabaseSync(snapshot,{readOnly:true});assert.equal(JSON.parse(backup.prepare('SELECT value FROM state').get().value).events.length,6);assert.equal(backup.prepare('SELECT COUNT(*) AS n FROM files').get().n,5);backup.close();portal.recovery.prune();assert.ok(fs.existsSync(snapshot));
+  await new Promise(resolve=>portal.server.close(resolve));portal=createPortal({env,noAutomaticBackup:true,noAutomaticMail:true});await listen();assert.equal(portal.store.read().events.length,0);assert.equal(portal.store.read().users.length,2);assert.equal((await admin.request('/state')).status,200);
+  const empty=(await admin.request('/demo/cleanup')).data;const repeated=await admin.request('/demo/cleanup','POST',{digest:empty.digest,confirmation:'BORRAR DEMO'});assert.equal(repeated.data.result.backup,null);
+});
+
+test('Demo cleanup never removes records from a private database',async()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'marquee-cleanup-private-')),store=new Store(directory);
+  try{await store.provisionProtectedAdmin('private-test-password-2026');const admin=store.read().users[0],before=store.read();const cleanup=require('../portal/demo-cleanup');assert.throws(()=>cleanup.clean(store,admin,{confirmation:'BORRAR DEMO'},{make(){throw new Error('Must not back up or delete');}}),{status:404});assert.deepEqual(store.read(),before);}finally{store.close();fs.rmSync(directory,{recursive:true,force:true});}
+});

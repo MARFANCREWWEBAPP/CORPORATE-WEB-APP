@@ -97,7 +97,7 @@ function createPortal(options={}) {
       if(write && (req.headers.origin!==origin||req.headers['sec-fetch-site']==='cross-site'))fail(403,'Origen de la petición no permitido.');
       const token=(req.headers.cookie||'').split(';').map(s=>s.trim()).find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1)||'';
       const session=store.session(token);
-      if(route==='/api/session'&&req.method==='GET')return send(200,{user:session?publicUser(session.user):null,csrf:session?.csrf||null,demo:demo?{accounts:require('./demo').accounts,password:require('./demo').password}:null,setupRequired:store.read().users.length===0,setupEmail:store.read().users.length===0?PROTECTED_ADMIN_EMAIL:undefined});
+      if(route==='/api/session'&&req.method==='GET')return send(200,{user:session?publicUser(session.user):null,csrf:session?.csrf||null,demo:demo?require('./demo-cleanup').publicDemo(store):null,setupRequired:store.read().users.length===0,setupEmail:store.read().users.length===0?PROTECTED_ADMIN_EMAIL:undefined});
       if(route==='/api/bootstrap'&&req.method==='POST') {
         rateLimit('setup:'+clientIp,5);const data=await readJson(req);
         if(store.read().users.length || !equal(data.token,env.BOOTSTRAP_TOKEN))fail(403,'El enlace de activación no es válido o ya se ha utilizado.');
@@ -141,6 +141,13 @@ function createPortal(options={}) {
         const emitter=store.changeEmitter();let last=-1;
         const update=()=>{if(!store.session(token)){res.end();return;}const revision=store.read().revision;if(revision!==last){res.write('data: '+JSON.stringify({revision})+'\n\n');last=revision;}};
         const heartbeat=setInterval(()=>{update();if(!res.writableEnded)res.write(': conectado\n\n');},10000);heartbeat.unref();emitter.on('change',update);streams.add(res);res.on('close',()=>{clearInterval(heartbeat);emitter.off('change',update);streams.delete(res);});update();return;
+      }
+      if(route==='/api/demo/cleanup'&&['GET','POST'].includes(req.method)){
+        admin(user);if(!demo)fail(404,'La limpieza solo está disponible en demostración.');
+        const cleanup=require('./demo-cleanup');
+        if(req.method==='GET')return send(200,cleanup.review(store,user));
+        const result=cleanup.clean(store,user,await readJson(req),recovery);
+        return send(200,{result,data:store.view(user),demo:cleanup.publicDemo(store)});
       }
       if(route==='/api/daily-summary'&&req.method==='GET')return send(200,operations.dailySummary(store,user));
       if(route==='/api/calendar'&&req.method==='GET'){res.setHeader('Content-Disposition','attachment; filename=marquee-eventos.ics');return send(200,operations.calendar(store,user),'text/calendar; charset=utf-8');}

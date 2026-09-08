@@ -80,9 +80,9 @@
   renderLogin=function(){auditLogin();if(!portalReady||portalSetup||portalAccount?.mustChangePassword)return;const form=document.querySelector('.v4-login-card form');if(!form)return;
     if(portalDemo){
       document.querySelector('.v4-version-pill').textContent='DEMO';
-      document.querySelector('.v4-login-card h2').textContent='Prueba cada perfil';
+      document.querySelector('.v4-login-card h2').textContent=portalDemo.cleanedAt?'Acceso a la demo':'Prueba cada perfil';
       document.querySelector('.v4-login-card h2 + p').textContent='Elige un perfil para rellenar sus credenciales y pulsa Entrar.';
-      form.insertAdjacentHTML('beforebegin',`<section class="portal-demo-accounts" aria-label="Accesos de demostración">${portalDemo.accounts.map((a,i)=>`<button type="button" class="portal-demo-profile" data-demo-profile="${i}"><strong>${escapeHtml(a.label)}</strong><span>${escapeHtml(a.email)}</span><small>${escapeHtml(a.description)}</small></button>`).join('')}<p>Contraseña para los tres perfiles: <code>${escapeHtml(portalDemo.password)}</code></p></section>`);
+      form.insertAdjacentHTML('beforebegin',`<section class="portal-demo-accounts" aria-label="Accesos de demostración">${portalDemo.accounts.map((a,i)=>`<button type="button" class="portal-demo-profile" data-demo-profile="${i}"><strong>${escapeHtml(a.label)}</strong><span>${escapeHtml(a.email)}</span><small>${escapeHtml(a.description)}</small></button>`).join('')}<p>Contraseña de los perfiles disponibles: <code>${escapeHtml(portalDemo.password)}</code></p></section>`);
       form.querySelector('button[type="submit"]').innerHTML='Entrar '+icon('arrowRight','icon-sm');
       document.querySelector('.login-note').textContent='Demo compartida con datos ficticios. Los cambios pueden reiniciarse al publicar una nueva versión.';
       for(const button of document.querySelectorAll('[data-demo-profile]'))button.addEventListener('click',()=>{const account=portalDemo.accounts[Number(button.dataset.demoProfile)];form.elements.email.value=account.email;form.elements.password.value=portalDemo.password;document.querySelectorAll('[data-demo-profile]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));form.querySelector('button[type="submit"]').focus();});

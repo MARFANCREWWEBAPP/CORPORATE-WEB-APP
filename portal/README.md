@@ -106,3 +106,7 @@ Objetivo inicial de recuperación propuesto: pérdida máxima de una hora de cam
 - Los enlaces de calendario son secretos revocables por usuario, guardados como hash y limitados a sus espacios. Compartirlos concede lectura del calendario a quien reciba el enlace.
 
 La prueba PostgreSQL usa el motor embebido; no acredita la conexión TCP/TLS de Railway, la carga de producción ni una restauración desde un proveedor real. La réplica S3 se prueba con transporte controlado y comparación de bytes; la activación requiere un ensayo con el destino acordado.
+
+## Limpieza de muestras
+
+`GET /api/demo/cleanup` devuelve a administración un plan ligado a la revisión, actor y registros. `POST /api/demo/cleanup` exige CSRF, digest vigente y `confirmation: "BORRAR DEMO"`. Solo funciona con DEMO_MODE y estado de base aislada demo. Guarda una copia local verificada antes de la transacción, borra eventos/archivos y cuentas de prueba salvo administradores preservados, revoca sus sesiones y registra la acción. Un fallo de copia impide la eliminación. El estado demo conserva una marca para no reinicializar las muestras al reiniciar la misma base. No hay un endpoint equivalente para vaciar datos privados.
