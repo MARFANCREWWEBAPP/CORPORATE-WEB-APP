@@ -1,70 +1,28 @@
-# Marquee Flow V4 · Demo interna
+# Restauracion pendiente de la V4 original
 
-Aplicación interna de Marquee para probar la gestión de peticiones de eventos corporativos entre fincas, comerciales y administración.
+Esta rama es un importador protegido; no es la web restaurada y no debe conectarse a Railway.
 
-## Estado de esta entrega
+Falta cargar **MARQUEE_V4_ORIGINAL_RESTAURADA_GITHUB.zip** en la raiz de esta rama.
+No descomprimir ni reconstruir el ZIP. Se exige el paquete exacto entregado en la conversacion.
 
-Esta rama contiene una **demo funcional para revisión de diseño, navegación y flujo de trabajo**. Los datos se guardan en `localStorage`, por lo que cada navegador mantiene su propia copia y todavía no existe sincronización multiusuario real.
+Una vez cargado, GitHub Actions comprueba el SHA-256 del ZIP y del HTML, ejecuta las pruebas y publica un arbol limpio en `main` y `railway-demo`, en una unica operacion atomica sin force-push. Si las ramas han cambiado desde la copia previa o no se conserva la copia, se detiene sin publicar.
 
-No deben introducirse datos personales, presupuestos confidenciales ni documentación real hasta conectar PostgreSQL, autenticación backend y almacenamiento privado S3/R2.
+## Version aprobada
 
-## Ejecutar en local
+- HTML: 812095 bytes.
+- SHA-256 HTML: `e7b2f81b2a26010b8c96d3450349f5b4caa2b7430e2732be93ca8cf4c1e93472`.
+- Objeto Git del HTML: `c2190917dc81afa89e666e6bf697920f1b82a94a`.
+- SHA-256 ZIP: `b8d48996fbc562df979d9de7031aeba6434609d404e026f15dcea39b8b35d106`.
 
-```bash
-npm install
-npm start
-```
+## Copias previas
 
-El servidor escucha en `0.0.0.0` y utiliza automáticamente la variable `PORT` proporcionada por Railway.
+- `backup/pre-v4-original-main-20260908`.
+- `backup/pre-v4-original-railway-demo-20260908`.
 
-## Desplegar en Railway
+El importador mantiene el HTML, CSS, JavaScript y los logotipos originales byte a byte. Solo corrige el servidor, los comandos de arranque y las comprobaciones.
 
-1. Crear un proyecto nuevo con **Deploy from GitHub repo**.
-2. Elegir `MARFANCREWWEBAPP/CORPORATE-WEB-APP` y la rama `main`.
-3. Añadir las variables de entorno indicadas abajo.
-4. Configurar `/health` como healthcheck.
-5. Generar un dominio desde **Settings → Networking**.
+## Alcance
 
-Railway detectará el script `npm start` definido en `package.json`. Los nuevos commits a `main` podrán activar despliegues automáticos cuando el repositorio quede conectado.
+Sigue siendo una demo local de navegador. Esto no configura autenticacion multiusuario, PostgreSQL, almacenamiento compartido o copias externas. No introducir datos personales reales.
 
-## Variables recomendadas en Railway
-
-```env
-NODE_ENV=production
-SITE_ACCESS_USER=marquee-review
-SITE_ACCESS_PASSWORD=<CLAVE_LARGA_Y_UNICA>
-```
-
-La protección HTTP externa solo se activa cuando están configuradas las dos variables `SITE_ACCESS_USER` y `SITE_ACCESS_PASSWORD`. No guardes la contraseña real en GitHub.
-
-## Healthcheck
-
-```text
-/health
-```
-
-## Accesos internos de demostración
-
-La pantalla de acceso permite seleccionar rápidamente los perfiles de administrador, comercial y usuario de finca. Todas las identidades son ficticias y están destinadas únicamente a pruebas.
-
-## Funciones incluidas en la demo
-
-- Dashboard operativo por perfil.
-- Bandeja **Pendiente de mí**.
-- Calendario y listado de eventos.
-- Buscador y filtros.
-- Comunicación vinculada a cada expediente.
-- Presupuestos y documentos con subida y descarga local.
-- Tareas, histórico, estados y responsable de la siguiente acción.
-- Fincas y separación visual de permisos.
-- Exportación, restauración y reinicio de datos de prueba.
-- Adaptación responsive para móvil.
-
-## Próxima fase productiva
-
-- PostgreSQL compartido.
-- Autenticación real y sesiones seguras.
-- Permisos RBAC aplicados en servidor.
-- Almacenamiento S3/Cloudflare R2.
-- Copias automáticas y restauración probada.
-- Comunicación multiusuario y notificaciones.
+En Railway el servidor original requiere `SITE_ACCESS_USER` y `SITE_ACCESS_PASSWORD` de al menos 20 caracteres cuando `NODE_ENV=production`. No se modifican ni leen esas credenciales desde este flujo.

@@ -1,33 +1,25 @@
-name: Validar demo V4
-
+name: Verificar V4 original exacta
 on:
   push:
-    branches: [main]
+    branches: [main, railway-demo]
   pull_request:
-    branches: [main]
-
+    branches: [main, railway-demo]
+  workflow_dispatch:
 permissions:
   contents: read
-
 jobs:
-  validate:
+  verify:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Descargar código
-        uses: actions/checkout@v4
-
-      - name: Configurar Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
         with:
-          node-version: 22
-          cache: npm
-
-      - name: Instalar dependencias
-        run: npm ci
-
-      - name: Validar sintaxis
-        run: npm run check
-
-      - name: Ejecutar prueba de arranque
-        run: npm test
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --ignore-scripts
+      - run: npm run check
+      - run: npm test
+      - name: Verificar arranques compatibles
+        run: node --check launch-v4.js && node --check start.js

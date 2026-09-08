@@ -1,0 +1,94 @@
+name: Restaurar V4 original verificada
+on:
+  push:
+    branches: ['restore/v4-original-clean']
+    paths:
+      - 'MARQUEE_V4_ORIGINAL_RESTAURADA_GITHUB.zip'
+      - '.github/workflows/import-original.yml'
+      - 'tools/prepare-original.py'
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: restore-v4-original
+  cancel-in-progress: false
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    outputs:
+      ready: ${{ steps.source.outputs.ready }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - id: source
+        shell: bash
+        run: |
+          if [ -f MARQUEE_V4_ORIGINAL_RESTAURADA_GITHUB.zip ]; then
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+            echo '## Pendiente: falta cargar el ZIP original' >> "$GITHUB_STEP_SUMMARY"
+            echo 'No se ha restaurado ni modificado main o railway-demo.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Subir MARQUEE_V4_ORIGINAL_RESTAURADA_GITHUB.zip a la raiz de esta rama.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+  restore:
+    needs: source
+    if: needs.source.outputs.ready == 'true' && github.repository == 'MARFANCREWWEBAPP/CORPORATE-WEB-APP'
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    permissions:
+      contents: write
+    env:
+      EXPECTED_MAIN: 1c21ab1a49179125d8186db42643cc929375101e
+      EXPECTED_RAILWAY: 1ad30313e356ea627444738331f2231ec4c9a4f8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Preparar solo el paquete original
+        run: python3 tools/prepare-original.py MARQUEE_V4_ORIGINAL_RESTAURADA_GITHUB.zip "$RUNNER_TEMP/v4-approved"
+      - name: Verificar integridad, sintaxis y servidor
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/v4-approved"
+          npm ci --ignore-scripts
+          npm run check
+          npm test
+          node --check launch-v4.js
+          node --check start.js
+          test "$(git hash-object index.html)" = c2190917dc81afa89e666e6bf697920f1b82a94a
+      - name: Conservar copias y publicar ambas ramas atomicamente
+        shell: bash
+        run: |
+          set -euo pipefail
+          main_now=$(git ls-remote origin refs/heads/main | cut -f1)
+          railway_now=$(git ls-remote origin refs/heads/railway-demo | cut -f1)
+          test "$main_now" = "$EXPECTED_MAIN" || { echo 'main ha cambiado: se necesita revisar antes de publicar.'; exit 1; }
+          test "$railway_now" = "$EXPECTED_RAILWAY" || { echo 'railway-demo ha cambiado: se necesita revisar antes de publicar.'; exit 1; }
+          backup_main=$(git ls-remote origin refs/heads/backup/pre-v4-original-main-20260908 | cut -f1)
+          backup_railway=$(git ls-remote origin refs/heads/backup/pre-v4-original-railway-demo-20260908 | cut -f1)
+          test "$backup_main" = "$EXPECTED_MAIN"
+          test "$backup_railway" = "$EXPECTED_RAILWAY"
+          git worktree add --detach "$RUNNER_TEMP/v4-publish" "$EXPECTED_MAIN"
+          cd "$RUNNER_TEMP/v4-publish"
+          git rm -r --ignore-unmatch .
+          cp -a "$RUNNER_TEMP/v4-approved/." .
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          test "$(git rev-parse :index.html)" = c2190917dc81afa89e666e6bf697920f1b82a94a
+          tree=$(git write-tree)
+          commit=$(git commit-tree "$tree" -p "$EXPECTED_MAIN" -p "$EXPECTED_RAILWAY" -m 'Restaurar V4 original aprobada sin modificar HTML ni logotipos')
+          git push --atomic origin "$commit:refs/heads/main" "$commit:refs/heads/railway-demo"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$commit"
+          test "$(git ls-remote origin refs/heads/railway-demo | cut -f1)" = "$commit"
+          echo '## V4 original publicada en GitHub' >> "$GITHUB_STEP_SUMMARY"
+          echo "Commit: $commit" >> "$GITHUB_STEP_SUMMARY"
+          echo 'HTML: 812095 bytes; SHA-256 e7b2f81b2a26010b8c96d3450349f5b4caa2b7430e2732be93ca8cf4c1e93472' >> "$GITHUB_STEP_SUMMARY"
+          echo 'main y railway-demo contienen el mismo commit. Las dos ramas backup siguen intactas.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'La finalizacion del despliegue de Railway no se verifica en este flujo.' >> "$GITHUB_STEP_SUMMARY"
