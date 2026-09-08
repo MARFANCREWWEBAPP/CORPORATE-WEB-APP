@@ -27,7 +27,7 @@ function loadIndexHtml() {
 
   const payloadFiles = fs
     .readdirSync(payloadDirectory)
-    .filter((name) => /^index\.html\.br\.b64\.slice-\d+$/.test(name))
+    .filter((name) => /^v4\.html\.br\.b64\.segment-\d+$/.test(name))
     .sort();
 
   if (payloadFiles.length === 0) {
