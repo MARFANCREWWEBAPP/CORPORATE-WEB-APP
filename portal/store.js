@@ -203,6 +203,7 @@ class Store {
   }
   eventValues(data) {
     const result={};
+    if ('eventType' in data) result.eventType=choice(data.eventType,['CONVENTION','PRESENTATION','GALA','MEETING','PARTY','NETWORKING','TRAINING','OTHER']);
     for (const key of ['eventName','contactFirstName','contactLastName','agency','finalClient','email','phone','audiovisualRequest','technicalRequirements','observations']) if (key in data) result[key]=text(data[key],['audiovisualRequest','technicalRequirements','observations'].includes(key)?15000:300,key==='eventName');
     if ('eventDate' in data) result.eventDate=date(data.eventDate,true);
     for (const key of ['estimatedStartTime','estimatedEndTime']) if (key in data) {result[key]=text(data[key],5);if(result[key]&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(result[key])) fail(400,'Hora no válida.');}

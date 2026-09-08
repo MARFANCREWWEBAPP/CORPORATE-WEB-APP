@@ -48,7 +48,8 @@ test('Real accounts, tenant isolation, archival, files, concurrency and recovery
   assert.equal((await one.request('/users','POST',{firstName:'Intruder',email:'intruder@example.test',role:'ADMIN'})).status,403);
   assert.equal((await one.request('/events','POST',{venueId:second.result.venue.id,eventName:'Wrong tenant',eventDate:'2027-05-01'})).status,403);
   assert.equal((await one.request('/events','POST',{eventName:'Bad date',eventDate:'2027-02-30'})).status,400);
-  let event=(await ok(one.request('/events','POST',{eventName:'Convención Cliente Uno',eventDate:'2027-05-01',finalClient:'Empresa Recurrente',audiovisualRequest:'Sonido y pantalla',numberOfPeople:120}))).result;
+  let event=(await ok(one.request('/events','POST',{eventName:'Convención Cliente Uno',eventType:'CONVENTION',eventDate:'2027-05-01',finalClient:'Empresa Recurrente',audiovisualRequest:'Sonido y pantalla',numberOfPeople:120}))).result;
+  assert.equal(event.eventType,'CONVENTION');
   const eventId=event.id;
   const otherEvent=(await ok(two.request('/events','POST',{eventName:'Privado Espacio Dos',eventDate:'2027-06-01',finalClient:'Cliente Privado'}))).result;
   assert.equal((await two.request('/events/'+eventId,'PATCH',{eventName:'Attack',revision:event.revision})).status,404);
