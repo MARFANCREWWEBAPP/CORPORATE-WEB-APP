@@ -1,16 +1,26 @@
 {
-  "name": "marquee-flow-v4-demo",
-  "version": "4.0.0-demo.1",
+  "name": "marquee-audiovisuales",
+  "version": "4.2.0",
   "private": true,
-  "description": "Demo interna de Marquee Flow V4 para validaci\u00f3n en Railway.",
+  "description": "Marquee Audiovisuales: portal de espacios, presupuestos, planificaci\u00f3n y conservaci\u00f3n de expedientes",
   "license": "UNLICENSED",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.16"
   },
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
-    "check": "node --check server.js && node scripts/check-original.js",
-    "test": "node --test scripts/server.test.js"
+    "start": "node scripts/start-demo.js",
+    "dev": "node scripts/start-demo.js",
+    "check": "node --check server.js && node scripts/check-original.js && node scripts/check-portal.js",
+    "test": "node --test scripts/server.test.js scripts/portal.test.js scripts/workflows.test.js scripts/demo.test.js scripts/operations.test.js scripts/postgres.test.js",
+    "demo": "node scripts/start-demo.js",
+    "start:original": "node server.js"
+  },
+  "dependencies": {
+    "pdfjs-dist": "6.3.289",
+    "pdfkit": "0.20.2",
+    "pg": "8.23.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8"
   }
 }

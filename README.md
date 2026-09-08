@@ -1,10 +1,10 @@
-# Marquee Flow V4 original
+# Marquee Audiovisuales — V4 Operativa
 
-Restauración exacta de la demo aprobada. `index.html` contiene toda la interfaz, estilos, scripts y logotipos originales, sin modificaciones.
+Aplicación de eventos, presupuestos y comunicación. El arranque predeterminado es una **demo compartida con datos ficticios**, acceso real al servidor y permisos por perfil. El nombre «Marquee Flow» se ha retirado de la interfaz activa.
 
-## Ejecutar
+## Probar la demo
 
-Requiere Node.js 20 o posterior. No hay dependencias externas.
+Requiere Node.js >=22.16 (recomendado 24). Instalar y ejecutar:
 
 ```sh
 npm ci
@@ -13,16 +13,30 @@ npm test
 npm start
 ```
 
-Escucha en `PORT` (3000 por defecto). `/health` comprueba el servidor. Los puntos de entrada `server.js`, `start.js` y `launch-v4.js` sirven la misma versión verificada.
+Abrir http://localhost:3210. En Railway se utiliza el puerto asignado y HTTPS. Los tres accesos están disponibles en la pantalla de entrada:
 
-`SITE_ACCESS_USER` y `SITE_ACCESS_PASSWORD` activan la protección HTTP externa; deben configurarse conjuntamente. En producción es obligatoria y la contraseña debe tener al menos 16 caracteres. No guardar secretos en GitHub.
+| Perfil | Email |
+| --- | --- |
+| Administración | admin@demo.test |
+| Comercial | comercial@demo.test |
+| Espacio de eventos | espacio@demo.test |
 
-## Integridad y alcance
+Contraseña pública de demostración: `MarqueeDemo2026!`.
 
-El servidor cancela el arranque si `index.html` difiere de los 812095 bytes originales o de su SHA-256. `npm run check` también verifica los dos scripts embebidos.
+La demo usa su propio almacenamiento `.demo-data` y muestras. Sus cambios sobreviven a un reinicio dentro del mismo almacenamiento, pero pueden perderse al reemplazar una instancia sin volumen. **No introducir datos reales en la demo.** El correo, Odoo, WhatsApp, IA y las transferencias externas se simulan; las credenciales de servicios heredadas no activan esas conexiones. No se copia la cuenta privada de administración al acceso público.
 
-Esta entrega es una demo de diseño y flujo con datos guardados en el navegador. Los perfiles son simulados; no hay sincronización multiusuario, autenticación backend ni copias externas. Los textos demostrativos de la interfaz se conservan como parte del original.
+## Qué incorpora
 
-Railway no se modifica ni despliega durante esta restauración. Su configuración existente queda intacta. Antes de una futura publicación se debe revisar la vinculación de ramas y el despliegue automático.
+Cuentas creadas desde administración, permisos por espacio de eventos, archivos protegidos, archivo de cancelados y realizados, histórico, estadísticas por espacio y cliente, «Pendiente de mí», petición rápida, responsables y próxima acción, chat adaptable, borradores, presupuesto vigente y visor integrado. Incluye generación de PDF, aceptación de versión con nombre y consentimiento, reglas por estado, recordatorios, resumen diario, conflictos de calendario y suscripciones de calendario de solo lectura.
 
-Fuente, limpieza, backups y pruebas: [RESTORE_V4_ORIGINAL.md](RESTORE_V4_ORIGINAL.md).
+El soporte PostgreSQL, las réplicas cifradas S3/R2 y los adaptadores externos están implementados y probados de forma aislada. Su activación real requiere infraestructura, cuentas y una validación con cada proveedor. La firma con certificado y la sincronización bidireccional Google/Outlook siguen pendientes.
+
+Estado detallado, límites y criterios de uso: [DEMO_OPERATIVA.md](DEMO_OPERATIVA.md). Configuración privada: [portal/README.md](portal/README.md).
+
+## Referencia original y recuperación
+
+`index.html` conserva los **812095 bytes** aprobados y SHA-256 `e7b2f81b2a26010b8c96d3450349f5b4caa2b7430e2732be93ca8cf4c1e93472`. La aplicación adapta esa plantilla al servirla. `npm run start:original` mantiene el arranque histórico, con sus condiciones de protección HTTP. No se han eliminado las ramas ni los archivos de respaldo existentes.
+
+Consultar [RESTORE_V4_ORIGINAL.md](RESTORE_V4_ORIGINAL.md), [AUDITORIA_V4_1.md](AUDITORIA_V4_1.md) y [IMPLEMENTACION_AUDITORIA.md](IMPLEMENTACION_AUDITORIA.md) para el registro histórico. Las descripciones de entregas anteriores no sustituyen el estado actual de esta demo.
+
+Administración dispone de **Configuración → Borrar eventos y usuarios demo**. Muestra el alcance, exige escribir `BORRAR DEMO` y crea una copia íntegra antes de borrar. Conserva el acceso administrador y las copias anteriores. Los tres perfiles iniciales solo desaparecen cuando administración ejecuta la limpieza; el despliegue no la ejecuta automáticamente.
