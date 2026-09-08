@@ -1,0 +1,39 @@
+name: Preparar Railway CLI
+
+on:
+  push:
+    paths:
+      - .github/workflows/prepare-railway-cli.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Instalar Railway CLI en directorio portable
+        run: |
+          mkdir -p "$GITHUB_WORKSPACE/railway-portable"
+          npm install --prefix "$GITHUB_WORKSPACE/railway-portable" @railway/cli@5.35.0
+          "$GITHUB_WORKSPACE/railway-portable/node_modules/.bin/railway" --version
+
+      - name: Empaquetar herramienta
+        run: |
+          tar -czf railway-cli-linux-x64.tgz -C "$GITHUB_WORKSPACE/railway-portable" .
+          sha256sum railway-cli-linux-x64.tgz > railway-cli-linux-x64.tgz.sha256
+
+      - name: Publicar artefacto temporal
+        uses: actions/upload-artifact@v4
+        with:
+          name: railway-cli-linux-x64
+          path: |
+            railway-cli-linux-x64.tgz
+            railway-cli-linux-x64.tgz.sha256
+          retention-days: 1
