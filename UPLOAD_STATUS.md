@@ -1,1 +1,0 @@
-Carga automática en curso.

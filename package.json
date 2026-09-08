@@ -2,7 +2,7 @@
   "name": "marquee-flow-v4-demo",
   "version": "4.0.0-demo.1",
   "private": true,
-  "description": "Demo interna de Marquee Flow V4 para validación en Railway.",
+  "description": "Demo interna de Marquee Flow V4 para validaci\u00f3n en Railway.",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=20"
@@ -10,7 +10,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
-    "check": "node --check server.js && node --check scripts/smoke-test.js",
-    "test": "node scripts/smoke-test.js"
+    "check": "node --check server.js && node scripts/check-original.js",
+    "test": "node --test scripts/server.test.js"
   }
 }

@@ -1,70 +1,28 @@
-# Marquee Flow V4 · Demo interna
+# Marquee Flow V4 original
 
-Aplicación interna de Marquee para probar la gestión de peticiones de eventos corporativos entre fincas, comerciales y administración.
+Restauración exacta de la demo aprobada. `index.html` contiene toda la interfaz, estilos, scripts y logotipos originales, sin modificaciones.
 
-## Estado de esta entrega
+## Ejecutar
 
-Esta rama contiene una **demo funcional para revisión de diseño, navegación y flujo de trabajo**. Los datos se guardan en `localStorage`, por lo que cada navegador mantiene su propia copia y todavía no existe sincronización multiusuario real.
+Requiere Node.js 20 o posterior. No hay dependencias externas.
 
-No deben introducirse datos personales, presupuestos confidenciales ni documentación real hasta conectar PostgreSQL, autenticación backend y almacenamiento privado S3/R2.
-
-## Ejecutar en local
-
-```bash
-npm install
+```sh
+npm ci
+npm run check
+npm test
 npm start
 ```
 
-El servidor escucha en `0.0.0.0` y utiliza automáticamente la variable `PORT` proporcionada por Railway.
+Escucha en `PORT` (3000 por defecto). `/health` comprueba el servidor. Los puntos de entrada `server.js`, `start.js` y `launch-v4.js` sirven la misma versión verificada.
 
-## Desplegar en Railway
+`SITE_ACCESS_USER` y `SITE_ACCESS_PASSWORD` activan la protección HTTP externa; deben configurarse conjuntamente. En producción es obligatoria y la contraseña debe tener al menos 16 caracteres. No guardar secretos en GitHub.
 
-1. Crear un proyecto nuevo con **Deploy from GitHub repo**.
-2. Elegir `MARFANCREWWEBAPP/CORPORATE-WEB-APP` y la rama `main`.
-3. Añadir las variables de entorno indicadas abajo.
-4. Configurar `/health` como healthcheck.
-5. Generar un dominio desde **Settings → Networking**.
+## Integridad y alcance
 
-Railway detectará el script `npm start` definido en `package.json`. Los nuevos commits a `main` podrán activar despliegues automáticos cuando el repositorio quede conectado.
+El servidor cancela el arranque si `index.html` difiere de los 812095 bytes originales o de su SHA-256. `npm run check` también verifica los dos scripts embebidos.
 
-## Variables recomendadas en Railway
+Esta entrega es una demo de diseño y flujo con datos guardados en el navegador. Los perfiles son simulados; no hay sincronización multiusuario, autenticación backend ni copias externas. Los textos demostrativos de la interfaz se conservan como parte del original.
 
-```env
-NODE_ENV=production
-SITE_ACCESS_USER=marquee-review
-SITE_ACCESS_PASSWORD=<CLAVE_LARGA_Y_UNICA>
-```
+Railway no se modifica ni despliega durante esta restauración. Su configuración existente queda intacta. Antes de una futura publicación se debe revisar la vinculación de ramas y el despliegue automático.
 
-La protección HTTP externa solo se activa cuando están configuradas las dos variables `SITE_ACCESS_USER` y `SITE_ACCESS_PASSWORD`. No guardes la contraseña real en GitHub.
-
-## Healthcheck
-
-```text
-/health
-```
-
-## Accesos internos de demostración
-
-La pantalla de acceso permite seleccionar rápidamente los perfiles de administrador, comercial y usuario de finca. Todas las identidades son ficticias y están destinadas únicamente a pruebas.
-
-## Funciones incluidas en la demo
-
-- Dashboard operativo por perfil.
-- Bandeja **Pendiente de mí**.
-- Calendario y listado de eventos.
-- Buscador y filtros.
-- Comunicación vinculada a cada expediente.
-- Presupuestos y documentos con subida y descarga local.
-- Tareas, histórico, estados y responsable de la siguiente acción.
-- Fincas y separación visual de permisos.
-- Exportación, restauración y reinicio de datos de prueba.
-- Adaptación responsive para móvil.
-
-## Próxima fase productiva
-
-- PostgreSQL compartido.
-- Autenticación real y sesiones seguras.
-- Permisos RBAC aplicados en servidor.
-- Almacenamiento S3/Cloudflare R2.
-- Copias automáticas y restauración probada.
-- Comunicación multiusuario y notificaciones.
+Fuente, limpieza, backups y pruebas: [RESTORE_V4_ORIGINAL.md](RESTORE_V4_ORIGINAL.md).

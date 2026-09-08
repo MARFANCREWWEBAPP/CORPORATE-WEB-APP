@@ -1,0 +1,10 @@
+'use strict';
+const fs = require('node:fs');
+const crypto = require('node:crypto');
+const vm = require('node:vm');
+const html = fs.readFileSync(require('node:path').join(__dirname, '../index.html'));
+if (html.length !== 812095 || crypto.createHash('sha256').update(html).digest('hex') !== 'e7b2f81b2a26010b8c96d3450349f5b4caa2b7430e2732be93ca8cf4c1e93472') throw new Error('V4 original alterada');
+const scripts = [...html.toString().matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)];
+if (scripts.length !== 2) throw new Error('Número de scripts inesperado');
+scripts.forEach((m,i) => new vm.Script(m[1], {filename:`original-script-${i}`}));
+console.log('V4 original: 812095 bytes, SHA-256 correcto, 2 scripts con sintaxis válida.');
