@@ -25,6 +25,12 @@ Contraseña pública de demostración: `MarqueeDemo2026!`.
 
 La demo usa su propio almacenamiento `.demo-data` y muestras. Sus cambios sobreviven a un reinicio dentro del mismo almacenamiento, pero pueden perderse al reemplazar una instancia sin volumen. **No introducir datos reales en la demo.** El correo, Odoo, WhatsApp, IA y las transferencias externas se simulan; las credenciales de servicios heredadas no activan esas conexiones. No se copia la cuenta privada de administración al acceso público.
 
+## Producción y día del evento (4.3.0)
+
+En Operativa aparecen **Producción** y **Día del evento**. Marquee prepara y publica órdenes con horario, responsables, documentos y versiones en PDF; el espacio confirma su revisión. Los cambios de alcance de un evento confirmado se valoran y se aprueban antes de aplicarse. La jornada registra avances, bloqueos e incidencias con fotos. Ajustes permite ensayar la recuperación de una copia sin sobrescribir la base activa.
+
+Ver [PRODUCCION_EVENTOS.md](PRODUCCION_EVENTOS.md) para recorridos, garantías y límites. La activación de infraestructura privada sigue pendiente; el despliegue predeterminado continúa siendo una demo.
+
 ## Qué incorpora
 
 Cuentas creadas desde administración, permisos por espacio de eventos, archivos protegidos, archivo de cancelados y realizados, histórico, estadísticas por espacio y cliente, «Pendiente de mí», petición rápida, responsables y próxima acción, chat adaptable, borradores, presupuesto vigente y visor integrado. Incluye generación de PDF, aceptación de versión con nombre y consentimiento, reglas por estado, recordatorios, resumen diario, conflictos de calendario y suscripciones de calendario de solo lectura.

@@ -1,3 +1,5 @@
+> Actualización 4.3.0: órdenes de producción, cambios con aprobación, jornada e incidencias y ensayo de recuperación. Detalle vigente en [PRODUCCION_EVENTOS.md](PRODUCCION_EVENTOS.md). Las limitaciones de infraestructura y proveedores indicadas aquí se mantienen.
+
 # V4 Operativa — revisión e implementación del plan
 
 Fecha: 8 de septiembre de 2026. Marca visible: **Marquee Audiovisuales**. Terminología: **espacio de eventos**. Entrega destinada a demostración pública; las cuentas y expedientes de trabajo anteriores permanecen separados.

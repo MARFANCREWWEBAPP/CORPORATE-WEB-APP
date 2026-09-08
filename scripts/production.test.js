@@ -1,0 +1,132 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
+const {createPortal}=require('../portal/server');
+const {Store}=require('../portal/store');
+const {accounts,password}=require('../portal/demo');
+const {createRecovery,verifyRecovery}=require('../portal/reliability');
+const {createContinuity,inventory}=require('../portal/continuity');
+async function fixture(t){
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'marquee-production-'));
+  const portal=createPortal({env:{DEMO_MODE:'1',APP_ORIGIN:'http://demo.test',DATA_DIR:directory},noAutomaticBackup:true,noAutomaticMail:true});
+  await new Promise(resolve=>portal.server.listen(0,'127.0.0.1',resolve));
+  const base='http://127.0.0.1:'+portal.server.address().port;
+  t.after(async()=>{portal.closeStreams();await new Promise(resolve=>portal.server.close(resolve));fs.rmSync(directory,{recursive:true,force:true});});
+  const client=()=>({cookie:'',csrf:'',async call(route,method='GET',body,headers={}){
+    const response=await fetch(base+'/api'+route,{method,headers:{Origin:'http://demo.test','Content-Type':'application/json',Cookie:this.cookie,'X-CSRF-Token':this.csrf,'Idempotency-Key':crypto.randomUUID(),...headers},body:body===undefined?undefined:JSON.stringify(body)});
+    if(response.headers.get('set-cookie'))this.cookie=response.headers.get('set-cookie').split(';')[0];
+    const data=response.headers.get('content-type')?.includes('json')?await response.json():Buffer.from(await response.arrayBuffer());
+    if(data.csrf)this.csrf=data.csrf;
+    return {status:response.status,data};
+  }});
+  const clients=[];for(const account of accounts){const c=client();assert.equal((await c.call('/login','POST',{email:account.email,password})).status,200);clients.push(c);}
+  const [admin,commercial,venue]=clients;
+  const fresh=id=>portal.store.read().events.find(e=>e.id===id);
+  const create=async()=>{
+    let e=(await venue.call('/events','POST',{eventName:'Producción de prueba',eventDate:'2028-02-15',estimatedStartTime:'18:00',estimatedEndTime:'20:00',numberOfPeople:100})).data.result;
+    const budget=await admin.call('/events/'+e.id+'/generate-budget','POST',{revision:e.revision,lines:[{description:'Servicio audiovisual',quantity:1,unitPrice:1000}],taxRate:21,publish:true});assert.equal(budget.status,200);
+    e=fresh(e.id);const accepted=await venue.call('/events/'+e.id+'/budgets/'+budget.data.result.id+'/decision','POST',{revision:e.revision,decision:'ACCEPTED',signature:{name:'Espacio Demo',consent:true}});assert.equal(accepted.status,200);
+    return fresh(e.id);
+  };
+  const prepare=async event=>{
+    const p=(await admin.call('/events/'+event.id+'/production')).data;
+    const draft=p.draft;draft.material='Sonido y proyección';draft.instructions='Comprobar la potencia antes de conectar';
+    draft.requiredUserIds=p.people.filter(p=>['ADMIN','VENUE_USER'].includes(p.role)).map(p=>p.id);
+    draft.steps.forEach((step,i)=>{step.time=String(12+i).padStart(2,'0')+':00';step.ownerId=i===0?p.people.find(u=>u.role==='VENUE_USER').id:p.people.find(u=>u.role==='ADMIN').id;});
+    assert.equal((await admin.call('/events/'+event.id+'/production/draft','POST',{revision:fresh(event.id).revision,draft})).status,200);
+    return draft;
+  };
+  const publish=async event=>{const r=await admin.call('/events/'+event.id+'/production/publish','POST',{revision:fresh(event.id).revision,confirm:true});assert.equal(r.status,200,JSON.stringify(r.data));return r.data.result;};
+  return {portal,directory,base,admin,commercial,venue,fresh,create,prepare,publish};
+}
+test('Production draft privacy, immutable publication, PDF, acknowledgement and scope',async t=>{
+  const f=await fixture(t),event=await f.create(),route='/events/'+event.id+'/production';
+  const draft=await f.prepare(event);
+  assert.equal((await f.venue.call(route+'/draft','POST',{revision:f.fresh(event.id).revision,draft})).status,403);
+  assert.equal((await f.venue.call(route)).data.draft,null);
+  assert.equal((await f.venue.call('/state')).data.data.events.find(e=>e.id===event.id).production.draft,null);
+  const release=await f.publish(event),json=JSON.stringify(release.snapshot);
+  assert.equal(crypto.createHash('sha256').update(json).digest('hex'),release.sha256);
+  assert.equal((await f.admin.call(route+'/publish','POST',{revision:f.fresh(event.id).revision,confirm:true})).status,409);
+  const pdf=await f.venue.call(route+'/releases/'+release.id+'.pdf');assert.equal(pdf.status,200);assert.equal(pdf.data.subarray(0,5).toString(),'%PDF-');
+  assert.equal((await f.venue.call(route+'/acknowledge','POST',{revision:f.fresh(event.id).revision,releaseId:release.id,sha256:'wrong',confirm:true})).status,409);
+  assert.equal((await f.venue.call(route+'/acknowledge','POST',{revision:f.fresh(event.id).revision,releaseId:release.id,sha256:release.sha256,confirm:true})).status,200);
+  const other=f.portal.store.read().events.find(e=>e.venueId!==event.venueId);
+  assert.equal((await f.venue.call('/events/'+other.id+'/production')).status,404);
+  assert.equal((await f.venue.call('/events/'+other.id+'/production/release/'+release.id+'.pdf')).status,404);
+  draft.material='Añadir micrófonos';assert.equal((await f.admin.call(route+'/draft','POST',{revision:f.fresh(event.id).revision,draft})).status,200);
+  const next=await f.publish(event);assert.equal(next.version,2);assert.equal(next.acknowledgements.length,0);
+  assert.equal(JSON.stringify(f.fresh(event.id).production.releases[0].snapshot),json);
+  assert.equal((await f.venue.call(route+'/acknowledge','POST',{revision:f.fresh(event.id).revision,releaseId:release.id,sha256:release.sha256,confirm:true})).status,409);
+});
+test('Confirmed changes require venue approval of exact quoted scope; originals and prices remain intact',async t=>{
+  const f=await fixture(t),event=await f.create(),base='/events/'+event.id;
+  await f.prepare(event);const release=await f.publish(event),originalBudget=structuredClone(f.fresh(event.id).budgets);
+  let revision=f.fresh(event.id).revision;
+  const direct=await f.admin.call(base,'PATCH',{revision,numberOfPeople:180});assert.equal(direct.status,409);assert.equal(direct.data.details.kind,'approved-change');assert.equal(f.fresh(event.id).numberOfPeople,100);assert.equal(f.fresh(event.id).revision,revision);
+  let proposed=await f.venue.call(base+'/change-requests','POST',{revision,title:'Ampliación de aforo',reason:'El cliente amplía la convocatoria',values:{numberOfPeople:180}});assert.equal(proposed.status,200);const change=proposed.data.result;
+  const review=base+'/change-requests/'+change.id;
+  assert.equal((await f.venue.call(review,'POST',{revision:f.fresh(event.id).revision,action:'ACCEPT',consent:true,name:'Contacto'})).status,409);
+  assert.equal((await f.venue.call(review,'POST',{revision:f.fresh(event.id).revision,action:'QUOTE',amount:50,quoteNotes:'No autorizado'})).status,403);
+  assert.equal((await f.admin.call(review,'POST',{revision:f.fresh(event.id).revision,action:'QUOTE',amount:'350.50',quoteNotes:'Refuerzo de sonido e impuestos incluidos'})).status,200);
+  assert.equal((await f.admin.call(review,'POST',{revision:f.fresh(event.id).revision,action:'ACCEPT',consent:true,name:'Admin'})).status,403);
+  const before=f.fresh(event.id);assert.equal(before.numberOfPeople,100);
+  const accept={revision:before.revision,action:'ACCEPT',consent:true,name:'Contacto del espacio',amount:1};const key=crypto.randomUUID();
+  const accepted=await f.venue.call(review,'POST',accept,{'Idempotency-Key':key});assert.equal(accepted.status,200,JSON.stringify(accepted.data));
+  assert.equal(accepted.data.result.decision.amountCents,35050);
+  assert.equal((await f.venue.call(review,'POST',accept,{'Idempotency-Key':key})).status,200);
+  const current=f.fresh(event.id);assert.equal(current.numberOfPeople,180);assert.deepEqual(current.budgets,originalBudget);assert.equal(current.changeRequests.length,1);
+  assert.equal((await f.venue.call('/state')).data.data.events.find(e=>e.id===event.id).production.needsPublication,true);
+  assert.equal((await f.admin.call(base+'/production/check','POST',{revision:current.revision,releaseId:release.id,stepId:'setup',status:'DONE'})).status,409);
+  assert.equal((await f.venue.call(base+'/production/acknowledge','POST',{revision:current.revision,releaseId:release.id,sha256:release.sha256,confirm:true})).status,409);
+  const next=await f.publish(event);assert.equal(next.snapshot.event.numberOfPeople,180);assert.equal(next.snapshot.extras[0].amountCents,35050);
+  assert.equal((await f.venue.call(review,'POST',{...accept,revision:f.fresh(event.id).revision})).status,409);
+  f.portal.store.transaction(null,'TEST_ACCESS_CHANGED',state=>{const user=state.users.find(u=>u.role==='VENUE_USER');const other=state.venues.find(v=>v.id!==event.venueId);user.venueId=other.id;user.venueIds=[other.id];});
+  assert.equal((await f.venue.call(review,'POST',accept,{'Idempotency-Key':key})).status,404,'A cached child record must not bypass changed venue permissions');
+});
+test('Stale proposals, denied fields, rejection, mandatory revision and schedule conflicts cannot bypass approval',async t=>{
+  const f=await fixture(t),event=await f.create(),base='/events/'+event.id;
+  assert.equal((await f.admin.call(base+'/change-requests','POST',{title:'Sin versión',reason:'Prueba',values:{}})).status,400);
+  assert.equal((await f.venue.call(base+'/change-requests','POST',{revision:event.revision,title:'Acceso',reason:'Prueba',values:{venueId:'other'}})).status,400);
+  const propose=async(n)=>{const r=await f.admin.call(base+'/change-requests','POST',{revision:f.fresh(event.id).revision,title:'Aforo '+n,reason:'Cambio de convocatoria',values:{numberOfPeople:n},amount:0,quoteNotes:'Sin suplemento'});assert.equal(r.status,200);return r.data.result;};
+  const first=await propose(140),second=await propose(200);
+  const staleRevision=f.fresh(event.id).revision;
+  assert.equal((await f.venue.call(base+'/change-requests/'+first.id,'POST',{revision:staleRevision,action:'ACCEPT',consent:true,name:'Contacto'})).status,200);
+  assert.equal((await f.venue.call(base+'/change-requests/'+second.id,'POST',{revision:staleRevision,action:'ACCEPT',consent:true,name:'Contacto'})).status,409);
+  assert.equal((await f.venue.call(base+'/change-requests/'+second.id,'POST',{revision:f.fresh(event.id).revision,action:'ACCEPT',consent:true,name:'Contacto'})).status,409);
+  assert.equal((await f.admin.call(base+'/change-requests/'+second.id,'POST',{revision:f.fresh(event.id).revision,action:'CANCEL',note:'Sustituida por cambio aprobado'})).status,200);
+  const third=await propose(300);assert.equal((await f.venue.call(base+'/change-requests/'+third.id,'POST',{revision:f.fresh(event.id).revision,action:'REJECT',note:'No procede'})).status,200);assert.equal(f.fresh(event.id).numberOfPeople,140);
+  const actor=f.portal.store.read().users.find(u=>u.role==='ADMIN');let conflict=f.portal.store.createEvent(actor,{eventName:'Otro evento',eventDate:'2028-03-15',venueId:event.venueId,estimatedStartTime:'18:00',estimatedEndTime:'20:00'});f.portal.store.updateEvent(actor,conflict.id,{revision:conflict.revision,status:'CONFIRMED'});
+  const dateChange=await f.admin.call(base+'/change-requests','POST',{revision:f.fresh(event.id).revision,title:'Cambiar fecha',reason:'Petición del cliente',values:{eventDate:'2028-03-15'},amount:0,quoteNotes:'Sin suplemento'});
+  assert.equal((await f.venue.call(base+'/change-requests/'+dateChange.data.result.id,'POST',{revision:f.fresh(event.id).revision,action:'ACCEPT',consent:true,name:'Contacto'})).status,409);assert.equal(f.fresh(event.id).eventDate,event.eventDate);
+});
+test('Day-of-event ownership, incident photos and resolution history survive archive and recovery',async t=>{
+  const f=await fixture(t),event=await f.create(),base='/events/'+event.id;
+  await f.prepare(event);const release=await f.publish(event);
+  assert.equal((await f.venue.call(base+'/production/check','POST',{revision:f.fresh(event.id).revision,releaseId:release.id,stepId:'setup',status:'DONE'})).status,403);
+  assert.equal((await f.venue.call(base+'/production/check','POST',{revision:f.fresh(event.id).revision,releaseId:release.id,stepId:'access',status:'BLOCKED',note:''})).status,400);
+  const step=await f.venue.call(base+'/production/check','POST',{revision:f.fresh(event.id).revision,releaseId:release.id,stepId:'access',status:'DONE',note:'Acceso preparado'});assert.equal(step.status,200);
+  const photo=Buffer.from('89504e470d0a1a0a','hex');
+  const uploaded=await f.venue.call(base+'/files','POST',{revision:f.fresh(event.id).revision,kind:'documents',originalName:'incidencia.png',base64:photo.toString('base64')});assert.equal(uploaded.status,200);
+  const owner=f.portal.store.read().users.find(u=>u.role==='ADMIN');
+  const incident=await f.venue.call(base+'/production/incidents','POST',{revision:f.fresh(event.id).revision,title:'Acceso obstruido',detail:'Material delante de la puerta',severity:'HIGH',ownerId:owner.id,photoFileKeys:[uploaded.data.result.fileKey]});assert.equal(incident.status,200);
+  assert.equal((await f.admin.call(base+'/production/incidents/'+incident.data.result.id,'POST',{revision:f.fresh(event.id).revision,status:'RESOLVED',note:'Se ha retirado el material'})).status,200);
+  assert.equal((await f.admin.call(base,'PATCH',{revision:f.fresh(event.id).revision,status:'COMPLETED'})).status,200);
+  assert.equal((await f.admin.call(base+'/production/check','POST',{revision:f.fresh(event.id).revision,releaseId:release.id,stepId:'setup',status:'DONE'})).status,409);
+  const drill=await f.admin.call('/continuity/drill','POST',{source:'local'});assert.equal(drill.status,200,JSON.stringify(drill.data));assert.equal(drill.data.result.orders,1);assert.ok(drill.data.result.archived>=1);
+  const backup=f.portal.store.backups()[0],destination=path.join(f.directory,'restored-final');verifyRecovery(path.join(f.directory,'backups',backup.filename),destination,backup.sha256);
+  const restored=new Store(destination);try{const saved=restored.read().events.find(e=>e.id===event.id);assert.equal(saved.production.incidents[0].status,'RESOLVED');assert.equal(saved.production.incidents[0].history.length,1);assert.equal(saved.production.checks[0].status,'DONE');assert.deepEqual(saved.production.releases,f.fresh(event.id).production.releases);assert.deepEqual(restored.file(restored.read().users[0],uploaded.data.result.fileKey).bytes,photo);}finally{restored.close();}
+  assert.equal((await f.venue.call('/continuity')).status,403);assert.equal((await f.venue.call('/continuity/drill','POST',{source:'local'})).status,403);
+  const status=(await f.admin.call('/continuity')).data;assert.equal(status.ready,false);assert.equal(status.lastDrill.source,'local');assert.equal((await f.admin.call('/continuity/drill','POST',{source:'external'})).status,409);
+  assert.equal((await f.venue.call('/state')).data.data.settings.lastRecoveryDrill,undefined);
+});
+test('External backups require readback and recovery verifies full business data without modifying live records',async t=>{
+  const f=await fixture(t);await f.create();const objects=new Map();let corrupt=false;
+  const env={BACKUP_S3_ENDPOINT:'https://storage.example.test',BACKUP_S3_BUCKET:'backups',BACKUP_S3_ACCESS_KEY:'sample',BACKUP_S3_SECRET_KEY:'sample',BACKUP_ENCRYPTION_KEY:crypto.randomBytes(32).toString('base64')};
+  const fetcher=async(url,request)=>{if(request.method==='PUT')objects.set(url.href,Buffer.from(request.body));return {ok:true,arrayBuffer:async()=>corrupt?Buffer.from('corrupt'):objects.get(url.href)};};
+  const recovery=createRecovery(f.portal.store,env,fetcher);const backup=recovery.make('test',true);await recovery.external();assert.ok(recovery.status().externalLastVerified);
+  const continuity=createContinuity(f.portal.store,recovery,env,fetcher),actor=f.portal.store.read().users[0];
+  const result=await continuity.drill(actor,{source:'external'});assert.equal(result.events,7);assert.equal(result.source,'external');assert.ok(result.filesSha256);
+  const before=f.portal.store.read().events;corrupt=true;await assert.rejects(()=>continuity.drill(actor,{source:'external'}));assert.deepEqual(f.portal.store.read().events,before);
+  recovery.make('next',true);await recovery.external();assert.ok(recovery.status().externalError);assert.equal(f.portal.store.backups()[0].external,undefined);
+  assert.ok(fs.existsSync(path.join(f.directory,'backups',backup.filename)));assert.ok(!fs.readdirSync(f.directory).some(n=>n.startsWith('.recovery-check-')));
+});

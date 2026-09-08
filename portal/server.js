@@ -9,6 +9,8 @@ const reliability=require('./reliability');
 reliability.install(Store);
 const operations=require('./operations');
 operations.install(Store);
+const productionWork=require('./production');
+productionWork.install(Store);
 const {createSecurity}=require('./security');
 const {createMail}=require('./mail');
 const {scheduleConflicts}=require('./workflow-store');
@@ -45,9 +47,10 @@ function createPortal(options={}) {
   const store=new Store(env.DATA_DIR||path.join(__dirname,demo?'../.demo-data':'../.data'),{databaseURL:env.DATABASE_URL,postgresTestDirectory:options.postgresTestDirectory});
   try {if(demo)require('./demo').seedDemo(store);else if(store.read().demo)throw new Error('La base de demostración solo puede abrirse en modo demo.');}catch(error){store.close();throw error;}
   if(!store.read().users.length&&(env.BOOTSTRAP_TOKEN||'').length<32){store.close();throw new Error('Configura BOOTSTRAP_TOKEN de al menos 32 caracteres para el alta inicial.');}
-  let security,recovery,mailer;try{security=createSecurity(store,env);recovery=reliability.createRecovery(store,env);mailer=createMail(store,env,security,options.mailFetch);}catch(error){store.close();throw error;}
+  let security,recovery,mailer;try{security=createSecurity(store,env);recovery=reliability.createRecovery(store,env,options.backupFetch);mailer=createMail(store,env,security,options.mailFetch);}catch(error){store.close();throw error;}
   const objectStorage=require('./object-storage').createObjectStorage(store,env,options.objectFetch);
   const integrations=require('./integrations').createIntegrations(store,env,options.integrationFetch);
+  const continuity=require('./continuity').createContinuity(store,recovery,env,options.backupFetch);
   const automation=operations.createAutomation(store);
   if(!options.noAutomaticBackup)automation.run();
   const automationTimer=options.noAutomaticBackup?null:setInterval(()=>{try{automation.run();}catch(error){console.error('Seguimiento automático no completado:',error.name);}},60000);automationTimer?.unref();
@@ -78,7 +81,7 @@ function createPortal(options={}) {
       if(req.headers['idempotency-key']&&!/^[a-zA-Z0-9_-]{16,100}$/.test(req.headers['idempotency-key']))fail(400,'Identificador de envío no válido.');
       const clientIp=reliability.clientAddress(req,env);
       const url=new URL(req.url,origin),route=url.pathname;
-      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.2.0-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
+      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.3.0-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
       if(['/','/index.html'].includes(route)&&['GET','HEAD'].includes(req.method)) {
         const gzip=/\bgzip\b/.test(req.headers['accept-encoding']||'');res.setHeader('Vary','Accept-Encoding');if(gzip)res.setHeader('Content-Encoding','gzip');return send(200,gzip?compressed:html,'text/html; charset=utf-8');
       }
@@ -156,7 +159,30 @@ function createPortal(options={}) {
       if(route==='/api/operations/rules'&&req.method==='GET'){admin(user);return send(200,{rules:operations.rules(store.read())});}
       if(route==='/api/operations/rules'&&req.method==='PATCH')return send(200,{result:store.saveRules(user,await readJson(req)),data:store.view(user)});
       if(route==='/api/services'&&req.method==='GET'){admin(user);return send(200,{recovery:recovery.status(),mail:mailer.status(),documents:objectStorage.status()});}
+      if(route==='/api/continuity'&&req.method==='GET'){admin(user);return send(200,continuity.status());}
+      if(route==='/api/continuity/drill'&&req.method==='POST'){admin(user);const result=await continuity.drill(user,await readJson(req));return send(200,{result,data:store.view(user)});}
       if(route==='/api/state'&&req.method==='GET')return send(200,{data:store.view(user)});
+      const productionMatch=route.match(/^\/api\/events\/([^/]+)\/production(?:\/(draft|publish|acknowledge|check|incidents)(?:\/([^/]+))?)?$/);
+      if(productionMatch){
+        const eventId=productionMatch[1],action=productionMatch[2];
+        if(!action&&req.method==='GET')return send(200,productionWork.getProduction(store,user,eventId));
+        const handlers={draft:'productionDraft',publish:'productionPublish',acknowledge:'productionAcknowledge',check:'productionCheck',incidents:'productionIncident'};
+        if(handlers[action]&&req.method==='POST'){
+          const data=await readJson(req),result=action==='incidents'?store.productionIncident(user,eventId,productionMatch[3],data):store[handlers[action]](user,eventId,data);
+          return send(200,{result,data:store.view(user)});
+        }
+        fail(404,'Acción de producción no encontrada.');
+      }
+      const orderPdf=route.match(/^\/api\/events\/([^/]+)\/production\/releases\/([^/]+)\.pdf$/);
+      if(orderPdf&&req.method==='GET'){
+        const bytes=await productionWork.productionPdf(store,user,orderPdf[1],orderPdf[2],demo);
+        res.setHeader('Content-Disposition','inline; filename="orden-produccion.pdf"');return send(200,bytes,'application/pdf');
+      }
+      const changeMatch=route.match(/^\/api\/events\/([^/]+)\/change-requests(?:\/([^/]+))?$/);
+      if(changeMatch&&req.method==='POST'){
+        const data=await readJson(req),result=changeMatch[2]?store.decideChange(user,changeMatch[1],changeMatch[2],data):store.proposeChange(user,changeMatch[1],data);
+        return send(200,{result,data:store.view(user)});
+      }
       if(route==='/api/backups'&&req.method==='GET'){admin(user);return send(200,{backups:store.backups(),lastBackupError,recovery:recovery.status()});}
       if(route==='/api/backups'&&req.method==='POST'){admin(user);await readJson(req);return send(201,{backup:makeBackup('manual')});}
       if(route==='/api/export'&&req.method==='GET') {
@@ -229,11 +255,11 @@ function createPortal(options={}) {
   }));
   server.requestTimeout=45000;server.headersTimeout=15000;server.maxRequestsPerSocket=1000;
   server.on('close',()=>{if(automationTimer)clearInterval(automationTimer);if(backupTimer)clearInterval(backupTimer);if(mailTimer)clearInterval(mailTimer);store.close();});
-  return {server,store,origin,recovery,mailer,security,automation,integrations,objectStorage,closeStreams:()=>{for(const response of streams)response.end();}};
+  return {server,store,origin,recovery,mailer,security,automation,integrations,objectStorage,continuity,closeStreams:()=>{for(const response of streams)response.end();}};
 }
 function start() {
   const port=Number(process.env.PORT||3000);if(!Number.isInteger(port)||port<1||port>65535)throw new Error('PORT no válido.');
-  if(process.env.PORTAL_REDIRECT_URL){const destination=new URL(process.env.PORTAL_REDIRECT_URL);if(destination.protocol!=='https:')throw new Error('La redirección debe ser HTTPS.');const server=http.createServer((req,res)=>{if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify({status:'ok',version:'4.2.0-redirect'}));}res.writeHead(307,{Location:new URL(new URL(req.url,'http://secondary.invalid').pathname+new URL(req.url,'http://secondary.invalid').search,destination).href,'Cache-Control':'no-store'});res.end();});server.listen(port,'0.0.0.0');return;}
+  if(process.env.PORTAL_REDIRECT_URL){const destination=new URL(process.env.PORTAL_REDIRECT_URL);if(destination.protocol!=='https:')throw new Error('La redirección debe ser HTTPS.');const server=http.createServer((req,res)=>{if(req.url==='/health'){res.writeHead(200,{'Content-Type':'application/json'});return res.end(JSON.stringify({status:'ok',version:'4.3.0-redirect'}));}res.writeHead(307,{Location:new URL(new URL(req.url,'http://secondary.invalid').pathname+new URL(req.url,'http://secondary.invalid').search,destination).href,'Cache-Control':'no-store'});res.end();});server.listen(port,'0.0.0.0');return;}
   const {server,closeStreams}=createPortal();server.listen(port,process.env.HOST||'0.0.0.0',()=>console.log('Marquee Audiovisuales: cuentas y datos persistentes, puerto '+port));
   for(const signal of ['SIGTERM','SIGINT'])process.on(signal,()=>{closeStreams();server.close(()=>process.exit(0));setTimeout(()=>process.exit(1),5000).unref();});
 }
