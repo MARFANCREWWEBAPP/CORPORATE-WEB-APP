@@ -1,3 +1,5 @@
-original_bytes=812095
-brotli_bytes=316439
-parts=7
+mode=direct-index
+index_file=index.html
+payload_required=false
+release=Marquee Flow V4 Staging
+note=Railway sirve index.html directamente mediante server.js.
