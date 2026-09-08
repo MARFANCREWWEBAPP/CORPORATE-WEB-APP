@@ -39,7 +39,7 @@ function buildPortal() {
   html=html.replaceAll('Borrador guardado automáticamente','Borrador en esta pestaña · envía para guardarlo');
   html=html.replaceAll('Un formulario guiado, con guardado automático y posibilidad de completar información más adelante.','La petición se guarda en el sistema al enviarla. Puedes completar después la información que falte.');
   html=html.replaceAll('Próximos y realizados','Confirmados actualmente');
-  html=html.replaceAll('espacio de eventos o espacio','espacio de eventos').replaceAll('espacios de eventos o espacios','espacios de eventos');
+  html=html.replaceAll('Espacio de eventos o espacio','Espacio de eventos').replaceAll('espacio de eventos o espacio','espacio de eventos').replaceAll('espacios de eventos o espacios','espacios de eventos');
   for(const [from,to]of [['de el espacio','del espacio'],['a el espacio','al espacio'],['misma espacio','mismo espacio'],['tu espacio de eventos','tu espacio de eventos'],['espacio de eventos activa','espacio de eventos activo'],['espacio de eventos obligatoria','espacio de eventos obligatorio'],['la primera espacio','el primer espacio']])html=html.replaceAll(from,to);
   html=html.replaceAll('app.data.venues.filter(v => v.id === user.venueId)','app.data.venues.filter(v => auditAllowedVenue(user,v.id))');
   html=html.replaceAll('d.estimatedStartTime || \"18:00\"','d.estimatedStartTime || \"\"').replaceAll('d.estimatedEndTime || \"23:30\"','d.estimatedEndTime || \"\"');
