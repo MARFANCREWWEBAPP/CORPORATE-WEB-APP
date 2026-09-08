@@ -8,7 +8,7 @@ Esta rama contiene una **demo funcional para revisión de diseño, navegación y
 
 No deben introducirse datos personales, presupuestos confidenciales ni documentación real hasta conectar PostgreSQL, autenticación backend y almacenamiento privado S3/R2.
 
-## Ejecutar
+## Ejecutar en local
 
 ```bash
 npm install
@@ -16,6 +16,16 @@ npm start
 ```
 
 El servidor escucha en `0.0.0.0` y utiliza automáticamente la variable `PORT` proporcionada por Railway.
+
+## Desplegar en Railway
+
+1. Crear un proyecto nuevo con **Deploy from GitHub repo**.
+2. Elegir `MARFANCREWWEBAPP/CORPORATE-WEB-APP` y la rama `main`.
+3. Añadir las variables de entorno indicadas abajo.
+4. Configurar `/health` como healthcheck.
+5. Generar un dominio desde **Settings → Networking**.
+
+Railway detectará el script `npm start` definido en `package.json`. Los nuevos commits a `main` podrán activar despliegues automáticos cuando el repositorio quede conectado.
 
 ## Variables recomendadas en Railway
 
@@ -25,7 +35,7 @@ SITE_ACCESS_USER=marquee-review
 SITE_ACCESS_PASSWORD=<CLAVE_LARGA_Y_UNICA>
 ```
 
-La protección HTTP externa solo se activa cuando están configuradas las dos variables `SITE_ACCESS_USER` y `SITE_ACCESS_PASSWORD`.
+La protección HTTP externa solo se activa cuando están configuradas las dos variables `SITE_ACCESS_USER` y `SITE_ACCESS_PASSWORD`. No guardes la contraseña real en GitHub.
 
 ## Healthcheck
 
@@ -33,15 +43,24 @@ La protección HTTP externa solo se activa cuando están configuradas las dos va
 /health
 ```
 
-## Empaquetado de la demo
-
-Para evitar límites de subida del conector, `index.html` se almacena comprimido con Brotli y dividido en varias partes dentro de `app-payload/`. `server.js` recompone y descomprime el contenido en memoria al arrancar. La experiencia web es idéntica a la demo HTML original.
-
 ## Accesos internos de demostración
 
-La propia pantalla de acceso permite seleccionar rápidamente los perfiles de administrador, comercial y usuario de finca. Todas las identidades son ficticias y están destinadas únicamente a pruebas.
+La pantalla de acceso permite seleccionar rápidamente los perfiles de administrador, comercial y usuario de finca. Todas las identidades son ficticias y están destinadas únicamente a pruebas.
 
-## Próxima fase
+## Funciones incluidas en la demo
+
+- Dashboard operativo por perfil.
+- Bandeja **Pendiente de mí**.
+- Calendario y listado de eventos.
+- Buscador y filtros.
+- Comunicación vinculada a cada expediente.
+- Presupuestos y documentos con subida y descarga local.
+- Tareas, histórico, estados y responsable de la siguiente acción.
+- Fincas y separación visual de permisos.
+- Exportación, restauración y reinicio de datos de prueba.
+- Adaptación responsive para móvil.
+
+## Próxima fase productiva
 
 - PostgreSQL compartido.
 - Autenticación real y sesiones seguras.
