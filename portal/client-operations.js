@@ -44,7 +44,7 @@
       if(action==='calendar-revoke'){await portalApi('/calendar/revoke','POST',{});toast('Suscripción anulada','El enlace anterior deja de dar acceso.','success');}
     });
   },true);
-  window.addEventListener('submit',event=>{const form=event.target;if(!(form instanceof HTMLFormElement)||!['operation-form','operation-rules-form'].includes(form.id))return;event.preventDefault();event.stopImmediatePropagation();const data=formObject(form),m=app.modal;
+  window.addEventListener('submit',event=>{const form=event.target;if(!(form instanceof HTMLFormElement)||!['operation-form','operation-rules-form'].includes(form.id)||app.modal?.kind?.startsWith('production-'))return;event.preventDefault();event.stopImmediatePropagation();const data=formObject(form),m=app.modal;
     portalRun(async()=>{
       if(form.id==='operation-rules-form'){const rules=Object.fromEntries(Object.keys(operationRules).map(key=>[key,{nextAction:data[key+'-action'],waitingOn:data[key+'-waiting'],days:Number(data[key+'-days'])}]));operationRules=await portalMutation('/operations/rules','PATCH',{rules});renderShell();toast('Reglas guardadas','Se aplicarán a los siguientes cambios de estado.','success');return;}
       if(m.kind==='demo-cleanup'){const response=await portalApi('/demo/cleanup','POST',{digest:m.digest,confirmation:data.confirmation});app.data=response.data;portalDemo=response.demo;ensureV4Data();app.selectedEventId=null;app.modal=null;auditState.draft=null;auditState.draftDirty=false;app.v4WizardDraft={};portalMemoryValues.clear();renderShell();toast('Demo limpiada',response.result.removedEvents+' eventos y '+response.result.removedUsers+' usuarios borrados. Administrador y copia conservados.','success');return;}
