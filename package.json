@@ -1,8 +1,8 @@
 {
   "name": "marquee-audiovisuales",
-  "version": "4.5.0",
+  "version": "4.5.1",
   "private": true,
-  "description": "Marquee Audiovisuales: portal de espacios, presupuestos, planificaci\u00f3n y conservaci\u00f3n de expedientes",
+  "description": "Marquee Audiovisuales: portal de espacios, presupuestos, planificación y conservación de expedientes",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=22.16"

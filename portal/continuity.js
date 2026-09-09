@@ -32,19 +32,19 @@ function createContinuity(store,recovery,env,fetcher=fetch) {
     const checks=[
       {key:'private',label:'Entorno privado separado de la demo',ok:!demo},
       {key:'database',label:'Base de datos PostgreSQL',ok:!demo&&store.db.kind==='postgres'},
-      {key:'volume',label:'Volumen persistente para copias locales',ok:!demo&&Boolean(env.RAILWAY_VOLUME_MOUNT_PATH)&&path.resolve(env.DATA_DIR)===path.resolve(env.RAILWAY_VOLUME_MOUNT_PATH)},
+      {key:'volume',label:'Volumen persistente para copias locales',ok:Boolean(env.DATA_DIR&&env.RAILWAY_VOLUME_MOUNT_PATH)&&path.resolve(env.DATA_DIR)===path.resolve(env.RAILWAY_VOLUME_MOUNT_PATH)},
       {key:'https',label:'Acceso HTTPS y clave de seguridad configurada',ok:!demo&&/^https:\/\//.test(env.APP_ORIGIN||'')&&Boolean(env.PORTAL_SECRET_KEY)},
       {key:'local',label:'Copia local reciente y comprobada',ok:Boolean(recent(r.lastBackup?.createdAt)&&!r.lastError)},
-      {key:'external',label:'Copia externa descargada y verificada',ok:Boolean(!demo&&recent(r.externalLastVerified)&&!r.externalError)},
-      {key:'drill',label:'Recuperación externa ensayada en los últimos 30 días',ok:Boolean(!demo&&!state.settings.lastRecoveryDrillError&&drill?.source==='external'&&Date.now()-Date.parse(drill.at)<30*86400000)},
+      {key:'external',label:'Copia externa descargada y verificada',ok:Boolean(recent(r.externalLastVerified)&&!r.externalError)},
+      {key:'drill',label:'Recuperación externa ensayada en los últimos 30 días',ok:Boolean(!state.settings.lastRecoveryDrillError&&drill?.source==='external'&&Date.now()-Date.parse(drill.at)<30*86400000)},
       {key:'capacity',label:'Capacidad de almacenamiento disponible',ok:!r.capacityWarning}
     ];
-    return {mode:demo?'demo':'private',ready:checks.every(c=>c.ok),checks,lastDrill:drill,running,externalConfigured:r.externalConfigured};
+    return {mode:demo?'demo':'private',ready:!demo&&checks.every(c=>c.ok),checks:demo?checks.filter(c=>!['private','database','https'].includes(c.key)):checks,lastDrill:drill,running,externalConfigured:r.externalConfigured};
   }
   async function drill(user,data){
     admin(user);if(running)fail(409,'Ya hay una comprobación de recuperación en curso.');
     if(!['local','external'].includes(data.source))fail(400,'Selecciona copia local o externa.');
-    if(data.source==='external'&&(env.DEMO_MODE==='1'||!recovery.status().externalConfigured))fail(409,'Las copias externas todavía no están configuradas en el entorno privado.');
+    if(data.source==='external'&&((env.DEMO_MODE==='1'&&env.DEMO_EXTERNAL_BACKUPS!=='1')||!recovery.status().externalConfigured))fail(409,'Las copias externas todavía no están configuradas para este entorno.');
     running=true;let temporary;
     try {
       let backup,bytes;
