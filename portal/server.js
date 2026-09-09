@@ -13,6 +13,7 @@ const productionWork=require('./production');
 productionWork.install(Store);
 const branding=require('./branding');
 branding.install(Store);
+require('./reservations').install(Store);
 const {createSecurity}=require('./security');
 const {createMail}=require('./mail');
 const {scheduleConflicts}=require('./workflow-store');
@@ -84,7 +85,7 @@ function createPortal(options={}) {
       if(req.headers['idempotency-key']&&!/^[a-zA-Z0-9_-]{16,100}$/.test(req.headers['idempotency-key']))fail(400,'Identificador de envío no válido.');
       const clientIp=reliability.clientAddress(req,env);
       const url=new URL(req.url,origin),route=url.pathname;
-      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.4.1-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
+      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.5.0-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
       if(route==='/brand/b2be-logo.png'&&['GET','HEAD'].includes(req.method)){res.setHeader('Cache-Control','public, max-age=0, must-revalidate');res.setHeader('ETag',masterLogoTag);return send(req.headers['if-none-match']===masterLogoTag?304:200,req.headers['if-none-match']===masterLogoTag?Buffer.alloc(0):masterLogo,'image/png');}
       if(['/','/index.html'].includes(route)&&['GET','HEAD'].includes(req.method)) {
         const gzip=/\bgzip\b/.test(req.headers['accept-encoding']||'');res.setHeader('Vary','Accept-Encoding');if(gzip)res.setHeader('Content-Encoding','gzip');return send(200,gzip?compressed:html,'text/html; charset=utf-8');
@@ -220,6 +221,12 @@ function createPortal(options={}) {
       if(generatedMatch&&req.method==='POST'){const result=await require('./commercial').generate(store,user,generatedMatch[1],await readJson(req),demo);return send(200,{result,data:store.view(user)});}
       const scheduleMatch=route.match(/^\/api\/events\/([^/]+)\/availability$/);
       if(scheduleMatch&&req.method==='GET'){if(!['ADMIN','COMMERCIAL'].includes(user.role))fail(403,'Solo Marquee consulta recursos.');return send(200,{conflicts:scheduleConflicts(store.read(),store.event(store.read(),user,scheduleMatch[1]))});}
+      const reservationMatch=route.match(/^\/api\/events\/([^/]+)\/reservations(?:\/([^/]+))?$/);
+      if(reservationMatch&&req.method==='POST'){
+        const data=await readJson(req);
+        const result=reservationMatch[2]?store.changeReservation(user,reservationMatch[1],reservationMatch[2],data):store.reserveEvent(user,reservationMatch[1],data);
+        return send(200,{result,data:store.view(user)});
+      }
       let result;
       if(route==='/api/import/preview'&&req.method==='POST'){admin(user);const data=await readJson(req,65*1024*1024);return send(200,require('./import').preview(store,user,data.archive));}
       else if(route==='/api/import/confirm'&&req.method==='POST'){admin(user);result=require('./import').commit(store,user,await readJson(req,65*1024*1024),recovery);}

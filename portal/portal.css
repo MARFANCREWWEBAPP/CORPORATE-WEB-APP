@@ -39,3 +39,17 @@ img.b2be-logo{background:#fff;border-radius:6px;object-fit:contain;padding:4px;f
 
 #branding-form{min-width:0;grid-template-columns:repeat(2,minmax(0,1fr))}#branding-form>*{min-width:0;max-width:100%}#branding-form p{overflow-wrap:anywhere}#branding-form input[type=file]{width:100%;min-width:0}#branding-form .branding-intro>div{min-width:0;max-width:100%}.branding-dialog .modal-foot{flex-wrap:wrap;gap:8px}
 @media(max-width:600px){#branding-form{grid-template-columns:minmax(0,1fr)}.branding-dialog .modal-foot{justify-content:flex-end}.branding-dialog .modal-foot .btn{min-width:0;white-space:normal}}
+.reservation-stats {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px;margin-bottom:18px}
+.reservation-stats section {display:flex;flex-direction:column;gap:6px}
+.reservation-stats strong {font-size:30px;line-height:1.2}
+.reservation-stats span {font-size:13px;color:#64748b}
+.reservation-list {display:grid;gap:16px;margin-top:18px}
+.reservation-title {display:flex;justify-content:space-between;align-items:start;gap:12px;flex-wrap:wrap}
+.reservation-title h3 {margin:0;overflow-wrap:anywhere}
+.reservation-status {font-size:12px;font-weight:700;padding:6px 10px;border-radius:20px;background:#f1f5f9;color:#475569}
+.reservation-status.is-active {background:#fff2ce;color:#745009}
+.reservation-filters {display:flex;gap:16px;align-items:end;flex-wrap:wrap}
+.reservation-filters>div {flex:1;min-width:min(240px,100%)}
+.reservation-list details {margin-top:16px}
+.reservation-list p,#reservation-form p {overflow-wrap:anywhere}
+@media(max-width:600px){.reservation-stats{gap:8px}.reservation-stats .card-pad{padding:14px 10px}.reservation-stats strong{font-size:24px}.reservation-stats span{font-size:11px}.reservation-list .portal-actions{align-items:stretch}.reservation-list .portal-actions .btn{flex:1;white-space:normal}}

@@ -2,6 +2,7 @@
 const crypto=require('node:crypto');
 const {fail,id,now,text,email,choice,date,ops,admin,canVenue,CLOSED}=require('./store');
 const normalize=value=>String(value||'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLocaleLowerCase('es').replace(/[^a-z0-9]+/g,' ').trim();
+const {active:activeReservation}=require('./reservation-state');
 function filterEvents(events,filters={}) {
   const query=normalize(filters.q);
   return events.filter(e=>(!filters.status||(filters.status==='CANCELLED'?['CANCELLED','NOT_ACCEPTED'].includes(e.status):e.status===filters.status))&&(!filters.venue||e.venueId===filters.venue)&&(!filters.from||e.eventDate>=filters.from)&&(!filters.to||e.eventDate<=filters.to)&&(!filters.eventType||e.eventType===filters.eventType)&&(!query||normalize([e.eventName,e.finalClient,e.agency,e.contactFirstName,e.contactLastName,e.email,e.phone,...e.documents.map(d=>d.displayName),...e.budgets.map(b=>b.displayName)].join(' ')).includes(query)));
@@ -15,11 +16,12 @@ function interval(event) {
 }
 function scheduleConflicts(state,event) {
   const range=interval(event);if(!range)return[];
-  return state.events.filter(e=>e.id!==event.id&&e.status==='CONFIRMED').flatMap(e=>{
+  return state.events.filter(e=>e.id!==event.id&&(e.status==='CONFIRMED'||(!CLOSED.includes(e.status)&&activeReservation(e)))).flatMap(e=>{
     const other=interval(e);if(!other||range.start>=other.end||other.start>=range.end)return[];
     const shared=(event.resourceIds||[]).filter(v=>(e.resourceIds||[]).includes(v));
     const room=event.venueId===e.venueId&&(!event.room||!e.room||normalize(event.room)===normalize(e.room));
-    return room||shared.length?[{eventId:e.id,eventName:e.eventName,date:e.eventDate,room,resources:shared.map(v=>state.resources.find(r=>r.id===v)?.name||'Recurso')}]:[];
+    const hold=e.status==='CONFIRMED'?null:activeReservation(e);
+    return room||shared.length?[{eventId:e.id,eventName:e.eventName,date:e.eventDate,room,resources:shared.map(v=>state.resources.find(r=>r.id===v)?.name||'Recurso'),kind:hold?'TEMPORARY_HOLD':'CONFIRMED',...(hold?{expiresAt:hold.expiresAt}:{})}]:[];
   });
 }
 function install(Store) {
@@ -32,7 +34,7 @@ function install(Store) {
     for(const k of ['setupMinutes','dismantleMinutes'])if(k in data){const n=Number(data[k]);if(!Number.isInteger(n)||n<0||n>10080)fail(400,'Indica minutos entre 0 y 10080.');event[k]=n;}
     if('resourceIds'in data){if(!ops(user))fail(403,'Solo Marquee asigna recursos.');if(!Array.isArray(data.resourceIds)||data.resourceIds.length>100)fail(400,'Recursos no válidos.');for(const v of data.resourceIds)if(!state.resources.some(r=>r.id===v&&r.active))fail(400,'Recurso no disponible.');event.resourceIds=[...new Set(data.resourceIds)];}
   };
-  Store.prototype.checkSchedule=function(state,event,data,user){const conflicts=scheduleConflicts(state,event);if(conflicts.length){if(!ops(user)||!text(data.conflictReason,3000))throw Object.assign(new Error('Hay coincidencias de espacio o recursos. Revisa disponibilidad antes de confirmar.'),{status:409,details:{kind:'schedule',conflicts:ops(user)?conflicts:[{message:'El espacio o los recursos requieren revisión de disponibilidad por Marquee.'}]}});this.history(event,user,'Confirmación con coincidencias revisadas: '+text(data.conflictReason,3000),'SCHEDULE_OVERRIDE',true);}};
+  Store.prototype.checkSchedule=function(state,event,data,user){const conflicts=scheduleConflicts(state,event);if(conflicts.length){const reserved=conflicts.some(c=>c.kind==='TEMPORARY_HOLD');if(reserved||!ops(user)||!text(data.conflictReason,3000))throw Object.assign(new Error(reserved?'Hay una reserva temporal activa que coincide. Debe liberarse o caducar antes de confirmar.':'Hay coincidencias de espacio o recursos. Revisa disponibilidad antes de confirmar.'),{status:409,details:{kind:reserved?'reservation':'schedule',conflicts:ops(user)?conflicts:[{message:'El espacio o los recursos requieren revisión de disponibilidad por Marquee.'}]}});this.history(event,user,'Confirmación con coincidencias revisadas: '+text(data.conflictReason,3000),'SCHEDULE_OVERRIDE',true);}};
   Store.prototype.saveDraft=function(user,draftId,data){return this.transaction(user,'DRAFT_SAVED',state=>{
     let draft=state.drafts.find(d=>d.id===draftId&&d.userId===user.id&&!d.submittedEventId);
     if(draftId&&!draft)fail(404,'Borrador no encontrado.');
