@@ -35,7 +35,7 @@ test('Demo: three actual roles, scoped files, durable samples and fixed shared c
   const created=await venue.request('/events','POST',{eventName:'Petición demo conservada',eventDate:'2027-11-01'});assert.equal(created.status,200);
   assert.equal((await commercial.request('/events/'+created.data.result.id+'/comments','POST',{body:'Respuesta del comercial'})).status,200);
   assert.equal((await venue.request('/events/'+other.id,'PATCH',{revision:other.revision,eventName:'Acceso ajeno'})).status,404);
-  const html=await (await fetch(base+'/')).text();assert.match(html,/<title>Marquee Audiovisuales/);assert.doesNotMatch(html,/Marquee Flow|FLOW V4/i);
+  const html=await (await fetch(base+'/')).text();assert.match(html,/<title>B2BE · Marquee/);assert.doesNotMatch(html,/Marquee Flow|FLOW V4/i);
   await new Promise(resolve=>portal.server.close(resolve));
   portal=createPortal({env,noAutomaticBackup:true});await listen();
   assert.equal(portal.store.read().events.length,7);assert.equal(portal.store.read().users.length,3);assert.equal((await venue.request('/state')).status,200);

@@ -14,10 +14,11 @@ function buildPortal() {
   replace(/  loadBackupCache\(false\);/g,'',1);
   html=html.replaceAll('localStorage','portalMemoryStorage');
   const memory='const portalMemoryValues = new Map(); const portalMemoryStorage = {getItem: key => portalMemoryValues.get(key) || null, setItem: (key,value) => portalMemoryValues.set(key,value), removeItem: key => portalMemoryValues.delete(key)};\n';
+  html=html.replace(/const LOGO_DARK = [^;]+;/,"const LOGO_DARK = '/brand/b2be-logo.png';").replace(/const LOGO_WHITE = [^;]+;/,"const LOGO_WHITE = '/brand/b2be-logo.png';");
   // Place the storage facade in the same lexical scope as the original application.
   replace(/  function loadData\(\)/g,memory+'  function loadData()',1);
   let bridge=fs.readFileSync(path.join(__dirname,'client.js'),'utf8');
-  bridge=bridge.replace('  portalBoot();',fs.readFileSync(path.join(__dirname,'client-workflows.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client-operations.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client-production.js'),'utf8')+'\n  portalBoot();');
+  bridge=bridge.replace('  portalBoot();',fs.readFileSync(path.join(__dirname,'client-workflows.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client-operations.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client-production.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client-branding.js'),'utf8')+'\n  portalBoot();');
   replace(/  const initialPage = location.hash.replace/g,bridge+'\n  const initialPage = location.hash.replace',1);
   const styles=fs.readFileSync(path.join(__dirname,'portal.css'),'utf8');
   replace(/<\/style>/g,styles+'\n</style>',1);
@@ -45,6 +46,8 @@ function buildPortal() {
   html=html.replaceAll('app.data.venues.filter(v => v.id === user.venueId)','app.data.venues.filter(v => auditAllowedVenue(user,v.id))');
   html=html.replaceAll('d.estimatedStartTime || \"18:00\"','d.estimatedStartTime || \"\"').replaceAll('d.estimatedEndTime || \"23:30\"','d.estimatedEndTime || \"\"');
   html=html.replaceAll('Con estos datos la petición ya aparecerá en el calendario.','Elige la fecha del evento. La petición aparecerá en el calendario cuando la envíes.');
+  html=html.replace(/<title>[^<]+<\/title>/,'<title>B2BE · Marquee</title>').replaceAll('alt="Marquee Audiovisuales"','alt="B2BE by Marquee"');
+  html=html.replaceAll('Corporate Event Workspace','Gestión de eventos entre empresas').replaceAll('<strong>Marquee Audiovisuales</strong>','<strong>B2BE by Marquee</strong>').replaceAll('Marquee Audiovisuales organiza automáticamente','B2BE organiza automáticamente');
   return html;
 }
 module.exports={buildPortal};
