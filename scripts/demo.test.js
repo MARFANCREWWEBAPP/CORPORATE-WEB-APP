@@ -7,6 +7,39 @@ const path=require('node:path');
 const {createPortal}=require('../portal/server');
 const {Store}=require('../portal/store');
 const {accounts,password}=require('../portal/demo');
+test('Demo external recovery uses dedicated credentials, verifies downloads and leaves live events intact',async t=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'marquee-demo-external-'));
+  const objects=new Map();let corrupt=false;
+  const env={DEMO_MODE:'1',DEMO_EXTERNAL_BACKUPS:'1',APP_ORIGIN:'http://demo.test',DATA_DIR:directory,
+    DATABASE_URL:'postgres://private.invalid/never',RESEND_API_KEY:'private-unused',BACKUP_S3_ENDPOINT:'https://private.invalid',BACKUP_S3_SESSION_TOKEN:'private-unused',
+    DEMO_BACKUP_S3_ENDPOINT:'https://demo-storage.test',DEMO_BACKUP_S3_BUCKET:'demo-only',DEMO_BACKUP_S3_URL_STYLE:'virtual-host',DEMO_BACKUP_S3_ACCESS_KEY:'demo-key',DEMO_BACKUP_S3_SECRET_KEY:'demo-secret',DEMO_BACKUP_ENCRYPTION_KEY:Buffer.alloc(32,17).toString('base64')};
+  const backupFetch=async(url,request)=>{
+    assert.equal(url.host,'demo-only.demo-storage.test');assert.ok(url.pathname.startsWith('/marquee/'));
+    assert.equal(request.headers['x-amz-security-token'],undefined);
+    if(request.method==='PUT')objects.set(url.href,Buffer.from(request.body));
+    return {ok:true,arrayBuffer:async()=>corrupt?Buffer.from('damaged'):objects.get(url.href)};
+  };
+  const portal=createPortal({env,backupFetch,noAutomaticBackup:true,noAutomaticMail:true});
+  t.after(()=>{portal.store.close();fs.rmSync(directory,{recursive:true,force:true});});
+  assert.equal(portal.mailer.configured,false);assert.notEqual(portal.store.db.kind,'postgres');assert.equal(portal.objectStorage.configured,false);
+  const before=structuredClone(portal.store.read().events),backup=portal.recovery.make('manual',true);
+  await portal.recovery.external();assert.ok(portal.recovery.status().externalLastVerified);
+  const uploaded=objects.get('https://demo-only.demo-storage.test/marquee/'+backup.filename+'.enc');assert.equal(uploaded.subarray(0,4).toString(),'MRQ1');assert.ok(!uploaded.includes(Buffer.from('SQLite format 3')));
+  const admin=portal.store.read().users.find(u=>u.role==='ADMIN');
+  await assert.rejects(()=>portal.continuity.drill(portal.store.read().users.find(u=>u.role==='VENUE_USER'),{source:'external'}),{status:403});
+  const report=await portal.continuity.drill(admin,{source:'external'});assert.equal(report.events,6);assert.equal(report.files,5);assert.deepEqual(portal.store.read().events,before);
+  const status=portal.continuity.status();assert.equal(status.ready,false);assert.ok(status.checks.find(c=>c.key==='external').ok);assert.ok(status.checks.find(c=>c.key==='drill').ok);
+  corrupt=true;await assert.rejects(()=>portal.continuity.drill(admin,{source:'external'}));assert.deepEqual(portal.store.read().events,before);assert.equal(portal.continuity.status().checks.find(c=>c.key==='drill').ok,false);
+});
+test('Persistent demo refuses incomplete backup opt-in or a different volume path before opening data',()=>{
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'marquee-demo-config-'));
+  try{
+    const env={DEMO_MODE:'1',APP_ORIGIN:'https://demo.test',DATA_DIR:directory};
+    assert.throws(()=>createPortal({env:{...env,DEMO_EXTERNAL_BACKUPS:'1',BACKUP_S3_ENDPOINT:'https://private.invalid'}}),/propios de las copias/);
+    assert.throws(()=>createPortal({env:{...env,RAILWAY_ENVIRONMENT_ID:'sample',RAILWAY_VOLUME_MOUNT_PATH:directory+'/other'}}),/volumen montado en DATA_DIR/);
+    assert.equal(fs.existsSync(path.join(directory,'marquee.sqlite')),false);
+  }finally{fs.rmSync(directory,{recursive:true,force:true});}
+});
 test('Demo: three actual roles, scoped files, durable samples and fixed shared credentials',async t=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'marquee-demo-test-'));
   const env={DEMO_MODE:'1',APP_ORIGIN:'http://demo.test',DATA_DIR:directory,RESEND_API_KEY:'unused',MAIL_FROM:'demo@example.test',BACKUP_S3_ENDPOINT:'https://unused.test',BACKUP_S3_BUCKET:'unused',BACKUP_S3_ACCESS_KEY:'unused',BACKUP_S3_SECRET_KEY:'unused',BACKUP_ENCRYPTION_KEY:Buffer.alloc(32).toString('base64')};

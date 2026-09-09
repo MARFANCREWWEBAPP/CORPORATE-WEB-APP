@@ -36,7 +36,9 @@ function sealed(bytes,key){const nonce=crypto.randomBytes(12),cipher=crypto.crea
 function unseal(bytes,key){if(bytes.subarray(0,4).toString()!=='MRQ1')throw new Error('Copia cifrada no válida');const cipher=crypto.createDecipheriv('aes-256-gcm',key,bytes.subarray(4,16));cipher.setAuthTag(bytes.subarray(-16));return Buffer.concat([cipher.update(bytes.subarray(16,-16)),cipher.final()]);}
 async function putObject(env,key,bytes,fetcher=fetch,method='PUT'){
   const endpoint=new URL(env.BACKUP_S3_ENDPOINT);if(endpoint.protocol!=='https:')throw new Error('El destino externo debe usar HTTPS.');
-  const objectPath=[env.BACKUP_S3_BUCKET,...key.split('/')].map(encodeURIComponent).join('/');const url=new URL(endpoint.href.replace(/\/$/,'')+'/'+objectPath);
+  const virtualHost=env.BACKUP_S3_URL_STYLE==='virtual-host';
+  if(virtualHost){if(!/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(env.BACKUP_S3_BUCKET||''))throw new Error('Nombre de almacén externo no válido.');endpoint.hostname=env.BACKUP_S3_BUCKET+'.'+endpoint.hostname;}
+  const objectPath=[...(virtualHost?[]:[env.BACKUP_S3_BUCKET]),...key.split('/')].map(encodeURIComponent).join('/');const url=new URL(endpoint.href.replace(/\/$/,'')+'/'+objectPath);
   const at=new Date().toISOString().replace(/[:-]|\.\d{3}/g,''),day=at.slice(0,8),region=env.BACKUP_S3_REGION||'auto';
   const digest=sha(bytes),headers={'host':url.host,'x-amz-content-sha256':digest,'x-amz-date':at};if(env.BACKUP_S3_SESSION_TOKEN)headers['x-amz-security-token']=env.BACKUP_S3_SESSION_TOKEN;
   const names=Object.keys(headers).sort();const canonical=[method,url.pathname,'',names.map(n=>n+':'+headers[n]+'\n').join(''),names.join(';'),digest].join('\n');

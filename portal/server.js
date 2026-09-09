@@ -43,10 +43,17 @@ function createPortal(options={}) {
   const suppliedEnv=options.env||process.env;
   const demo=suppliedEnv.DEMO_MODE==='1';
   const env=demo?{...suppliedEnv,DATABASE_URL:'',RESEND_API_KEY:'',BACKUP_S3_ENDPOINT:''}:suppliedEnv;
+  // Demo backups need their own explicit credentials; never inherit a private destination.
+  if(demo&&suppliedEnv.DEMO_EXTERNAL_BACKUPS==='1'){
+    const keys=['BACKUP_S3_ENDPOINT','BACKUP_S3_BUCKET','BACKUP_S3_ACCESS_KEY','BACKUP_S3_SECRET_KEY','BACKUP_ENCRYPTION_KEY'];
+    if(keys.some(key=>!suppliedEnv['DEMO_'+key]))throw new Error('Configura el destino y la clave propios de las copias de demostración.');
+    for(const key of [...keys,'BACKUP_S3_REGION','BACKUP_S3_SESSION_TOKEN','BACKUP_S3_URL_STYLE'])env[key]=suppliedEnv['DEMO_'+key]||'';
+  }
   const origin=new URL(env.APP_ORIGIN||'http://localhost:3000').origin;
   const production=env.NODE_ENV==='production'||Boolean(env.RAILWAY_ENVIRONMENT_ID);
   if(production && (!env.APP_ORIGIN||!origin.startsWith('https://')||(!demo&&!env.DATA_DIR)))throw new Error('Configura APP_ORIGIN HTTPS y DATA_DIR persistente antes de activar el portal.');
   if(!demo && env.RAILWAY_ENVIRONMENT_ID && (!env.RAILWAY_VOLUME_MOUNT_PATH||path.resolve(env.DATA_DIR)!==path.resolve(env.RAILWAY_VOLUME_MOUNT_PATH)))throw new Error('El portal necesita un volumen Railway montado en DATA_DIR.');
+  if(demo&&env.RAILWAY_ENVIRONMENT_ID&&(env.RAILWAY_VOLUME_MOUNT_PATH||env.DEMO_EXTERNAL_BACKUPS==='1')&&(!env.DATA_DIR||!env.RAILWAY_VOLUME_MOUNT_PATH||path.resolve(env.DATA_DIR)!==path.resolve(env.RAILWAY_VOLUME_MOUNT_PATH)))throw new Error('La demostración persistente necesita el volumen montado en DATA_DIR.');
   const store=new Store(env.DATA_DIR||path.join(__dirname,demo?'../.demo-data':'../.data'),{databaseURL:env.DATABASE_URL,postgresTestDirectory:options.postgresTestDirectory});
   try {if(demo)require('./demo').seedDemo(store);else if(store.read().demo)throw new Error('La base de demostración solo puede abrirse en modo demo.');}catch(error){store.close();throw error;}
   if(!store.read().users.length&&(env.BOOTSTRAP_TOKEN||'').length<32){store.close();throw new Error('Configura BOOTSTRAP_TOKEN de al menos 32 caracteres para el alta inicial.');}
@@ -85,7 +92,7 @@ function createPortal(options={}) {
       if(req.headers['idempotency-key']&&!/^[a-zA-Z0-9_-]{16,100}$/.test(req.headers['idempotency-key']))fail(400,'Identificador de envío no válido.');
       const clientIp=reliability.clientAddress(req,env);
       const url=new URL(req.url,origin),route=url.pathname;
-      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.5.0-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
+      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.5.1-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
       if(route==='/brand/b2be-logo.png'&&['GET','HEAD'].includes(req.method)){res.setHeader('Cache-Control','public, max-age=0, must-revalidate');res.setHeader('ETag',masterLogoTag);return send(req.headers['if-none-match']===masterLogoTag?304:200,req.headers['if-none-match']===masterLogoTag?Buffer.alloc(0):masterLogo,'image/png');}
       if(['/','/index.html'].includes(route)&&['GET','HEAD'].includes(req.method)) {
         const gzip=/\bgzip\b/.test(req.headers['accept-encoding']||'');res.setHeader('Vary','Accept-Encoding');if(gzip)res.setHeader('Content-Encoding','gzip');return send(200,gzip?compressed:html,'text/html; charset=utf-8');
