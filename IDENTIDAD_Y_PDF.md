@@ -27,3 +27,7 @@ Los presupuestos generados y las órdenes de producción usan una plantilla A4 c
 Revisión visual: formulario de escritorio, móvil de 390 px sin desbordamientos, carga real de PNG, vista previa integrada y guardado; presupuesto de una página, presupuesto de 60 conceptos en seis páginas y orden de producción en dos páginas. La fuente V4 sigue teniendo 812095 bytes y SHA-256 `e7b2f81b2a26010b8c96d3450349f5b4caa2b7430e2732be93ca8cf4c1e93472`.
 
 La publicación sigue siendo una demo con datos ficticios. La infraestructura privada y sus proveedores externos mantienen el estado descrito en `PRODUCCION_EVENTOS.md`; esta actualización no activa servicios de pago.
+
+## Variante de marca elegida (4.4.1)
+
+Se aplica la tercera opción: Marquee y su huella como marca principal, con B2BE debajo. La aplicación y los PDF nuevos usan `portal/assets/marquee-b2be-logo.png`. La variante anterior se conserva como referencia; los logotipos personalizados de los espacios y los presupuestos emitidos no se modifican.

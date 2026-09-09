@@ -46,8 +46,8 @@ function buildPortal() {
   html=html.replaceAll('app.data.venues.filter(v => v.id === user.venueId)','app.data.venues.filter(v => auditAllowedVenue(user,v.id))');
   html=html.replaceAll('d.estimatedStartTime || \"18:00\"','d.estimatedStartTime || \"\"').replaceAll('d.estimatedEndTime || \"23:30\"','d.estimatedEndTime || \"\"');
   html=html.replaceAll('Con estos datos la petición ya aparecerá en el calendario.','Elige la fecha del evento. La petición aparecerá en el calendario cuando la envíes.');
-  html=html.replace(/<title>[^<]+<\/title>/,'<title>B2BE · Marquee</title>').replaceAll('alt="Marquee Audiovisuales"','alt="B2BE by Marquee"');
-  html=html.replaceAll('Corporate Event Workspace','Gestión de eventos entre empresas').replaceAll('<strong>Marquee Audiovisuales</strong>','<strong>B2BE by Marquee</strong>').replaceAll('Marquee Audiovisuales organiza automáticamente','B2BE organiza automáticamente');
+  html=html.replace(/<title>[^<]+<\/title>/,'<title>Marquee · B2BE</title>').replaceAll('alt="Marquee Audiovisuales"','alt="Marquee B2BE"');
+  html=html.replaceAll('Corporate Event Workspace','Gestión de eventos entre empresas').replaceAll('<strong>Marquee Audiovisuales</strong>','<strong>Marquee B2BE</strong>').replaceAll('Marquee Audiovisuales organiza automáticamente','B2BE organiza automáticamente');
   return html;
 }
 module.exports={buildPortal};
