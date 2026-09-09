@@ -1,8 +1,8 @@
 {
   "name": "marquee-audiovisuales",
-  "version": "4.4.1",
+  "version": "4.5.0",
   "private": true,
-  "description": "Marquee Audiovisuales: portal de espacios, presupuestos, planificación y conservación de expedientes",
+  "description": "Marquee Audiovisuales: portal de espacios, presupuestos, planificaci\u00f3n y conservaci\u00f3n de expedientes",
   "license": "UNLICENSED",
   "engines": {
     "node": ">=22.16"
@@ -11,7 +11,7 @@
     "start": "node scripts/start-demo.js",
     "dev": "node scripts/start-demo.js",
     "check": "node --check server.js && node scripts/check-original.js && node scripts/check-portal.js",
-    "test": "node --test scripts/server.test.js scripts/portal.test.js scripts/workflows.test.js scripts/demo.test.js scripts/operations.test.js scripts/postgres.test.js scripts/production.test.js scripts/branding.test.js",
+    "test": "node --test scripts/server.test.js scripts/portal.test.js scripts/workflows.test.js scripts/demo.test.js scripts/operations.test.js scripts/postgres.test.js scripts/production.test.js scripts/branding.test.js scripts/reservations.test.js",
     "demo": "node scripts/start-demo.js",
     "start:original": "node server.js"
   },

@@ -27,6 +27,8 @@ La demo usa su propio almacenamiento `.demo-data` y muestras. Sus cambios sobrev
 
 ## Producción y día del evento (4.3.0)
 
+En **Planificación → Reservas temporales** (4.5.0), administración y comercial pueden apartar una fecha, ampliar su plazo y liberarla conservando el histórico. La comprobación incluye sala, montaje, desmontaje y recursos; cada espacio consulta solo sus eventos. Ver [RESERVAS_TEMPORALES.md](RESERVAS_TEMPORALES.md).
+
 En Operativa aparecen **Producción** y **Día del evento**. Marquee prepara y publica órdenes con horario, responsables, documentos y versiones en PDF; el espacio confirma su revisión. Los cambios de alcance de un evento confirmado se valoran y se aprueban antes de aplicarse. La jornada registra avances, bloqueos e incidencias con fotos. Ajustes permite ensayar la recuperación de una copia sin sobrescribir la base activa.
 
 Ver [PRODUCCION_EVENTOS.md](PRODUCCION_EVENTOS.md) para recorridos, garantías y límites. La activación de infraestructura privada sigue pendiente; el despliegue predeterminado continúa siendo una demo.

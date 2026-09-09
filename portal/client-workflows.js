@@ -24,7 +24,7 @@
   portalRenderCancel=function(){const event=eventById(app.modal.id);app.modal={type:'audit',kind:'cancel',title:'Archivar como cancelado',fields:auditArea('closeReason','Motivo de cancelación','','required'),submit:'Archivar conservando los datos',eventId:event.id,revision:event.revision,status:'CANCELLED'};};
   const auditBaseMutation=portalMutation;
   portalMutation=async function(route,method,data){try{return await auditBaseMutation(route,method,data);}catch(error){
-    if(error.status===409&&error.details?.current&&error.details.kind!=='approved-change'&&method==='PATCH'){
+    if(error.status===409&&error.details?.current&&!['approved-change','reservation'].includes(error.details.kind)&&method==='PATCH'){
       const current=error.details.current;const fields=Object.entries(data).filter(([k,v])=>!['revision','eventId','conflictReason'].includes(k)&&auditDisplayValue(k,v)!==auditDisplayValue(k,current[k]));
       const previousModal=app.modal; auditState.conflict={previousModal,data};
       const details=error.details.kind==='schedule'?`<div class="portal-notice">${(error.details.conflicts||[]).map(c=>escapeHtml(c.eventName||c.message)+' '+escapeHtml(c.date||'')).join('<br>')}</div>`:'';
