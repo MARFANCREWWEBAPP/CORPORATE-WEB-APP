@@ -8,4 +8,13 @@ document.getElementById('next').onclick=()=>{pageNumber=Math.min(pdf?.numPages||
 document.getElementById('zoom-in').onclick=()=>{zoom=Math.min(3,zoom+.25);void render();};
 document.getElementById('zoom-out').onclick=()=>{zoom=Math.max(.5,zoom-.25);void render();};
 let resizing;addEventListener('resize',()=>{clearTimeout(resizing);resizing=setTimeout(()=>void render(),150);});
-try{const file=new URLSearchParams(location.search).get('file');if(!/^[a-zA-Z0-9-]+$/.test(file||''))throw new Error('Archivo no válido.');const response=await fetch('/api/files/'+file,{credentials:'same-origin'});if(!response.ok)throw new Error('El archivo no está disponible o tu sesión ha caducado.');const download=document.getElementById('download');download.href='/api/files/'+file+'?download=1';download.hidden=false;pdf=await getDocument({data:new Uint8Array(await response.arrayBuffer()),isEvalSupported:false,useWasm:false,cMapUrl:'/pdfjs/cmaps/',cMapPacked:true,standardFontDataUrl:'/pdfjs/standard_fonts/'}).promise;await render();}catch(error){status.textContent=error.message||'No se pudo abrir el documento.';canvas.hidden=true;}
+try{
+  const params=new URLSearchParams(location.search),file=params.get('file'),venue=params.get('venue'),preview=params.get('preview');let source;
+  if(file&&/^[a-zA-Z0-9-]+$/.test(file))source='/api/files/'+file;
+  else if(venue&&/^[a-zA-Z0-9-]+$/.test(venue))source='/api/venues/'+venue+'/branding-preview.pdf';
+  else if(preview&&preview.startsWith('blob:'+location.origin+'/'))source=preview;
+  else throw new Error('Archivo no válido.');
+  const response=await fetch(source,{credentials:'same-origin'});if(!response.ok)throw new Error('El archivo no está disponible o tu sesión ha caducado.');
+  const download=document.getElementById('download');download.href=file?source+'?download=1':source;download.download=preview||venue?'identidad-espacio.pdf':'';download.hidden=false;
+  pdf=await getDocument({data:new Uint8Array(await response.arrayBuffer()),isEvalSupported:false,useWasm:false,cMapUrl:'/pdfjs/cmaps/',cMapPacked:true,standardFontDataUrl:'/pdfjs/standard_fonts/'}).promise;await render();
+}catch(error){status.textContent=error.message||'No se pudo abrir el documento.';canvas.hidden=true;}

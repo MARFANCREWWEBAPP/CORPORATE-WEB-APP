@@ -11,6 +11,8 @@ const operations=require('./operations');
 operations.install(Store);
 const productionWork=require('./production');
 productionWork.install(Store);
+const branding=require('./branding');
+branding.install(Store);
 const {createSecurity}=require('./security');
 const {createMail}=require('./mail');
 const {scheduleConflicts}=require('./workflow-store');
@@ -55,10 +57,11 @@ function createPortal(options={}) {
   if(!options.noAutomaticBackup)automation.run();
   const automationTimer=options.noAutomaticBackup?null:setInterval(()=>{try{automation.run();}catch(error){console.error('Seguimiento automático no completado:',error.name);}},60000);automationTimer?.unref();
   const streams=new Set();
+  const masterLogo=fs.readFileSync(path.join(__dirname,'assets/b2be-logo.png')),masterLogoTag='\"'+crypto.createHash('sha256').update(masterLogo).digest('hex')+'\"';
   const html=Buffer.from(buildPortal());
   const compressed=zlib.gzipSync(html);
   const hashes=[...html.toString().matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m=>`'sha256-${crypto.createHash('sha256').update(m[1]).digest('base64')}'`);
-  const csp=`default-src 'self'; script-src ${hashes.join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; media-src 'self' data: blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`;
+  const csp=`default-src 'self'; script-src ${hashes.join(' ')}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' blob:; media-src 'self' data: blob:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`;
   const cookieName=production?'__Host-marquee_session':'marquee_session';
   const cookie=(token,age=43200)=>`${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${age}${production?'; Secure':''}`;
   const attempts=new Map();let hashing=0;let lastBackupError=null;
@@ -81,12 +84,13 @@ function createPortal(options={}) {
       if(req.headers['idempotency-key']&&!/^[a-zA-Z0-9_-]{16,100}$/.test(req.headers['idempotency-key']))fail(400,'Identificador de envío no válido.');
       const clientIp=reliability.clientAddress(req,env);
       const url=new URL(req.url,origin),route=url.pathname;
-      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.3.0-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
+      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.4.0-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
+      if(route==='/brand/b2be-logo.png'&&['GET','HEAD'].includes(req.method)){res.setHeader('Cache-Control','public, max-age=0, must-revalidate');res.setHeader('ETag',masterLogoTag);return send(req.headers['if-none-match']===masterLogoTag?304:200,req.headers['if-none-match']===masterLogoTag?Buffer.alloc(0):masterLogo,'image/png');}
       if(['/','/index.html'].includes(route)&&['GET','HEAD'].includes(req.method)) {
         const gzip=/\bgzip\b/.test(req.headers['accept-encoding']||'');res.setHeader('Vary','Accept-Encoding');if(gzip)res.setHeader('Content-Encoding','gzip');return send(200,gzip?compressed:html,'text/html; charset=utf-8');
       }
       if(['/viewer','/viewer.js','/viewer.css'].includes(route)&&req.method==='GET'){
-        const filename=route==='/viewer'?'viewer.html':route.slice(1);res.setHeader('X-Frame-Options','SAMEORIGIN');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; worker-src 'self'; font-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; object-src 'none'; frame-ancestors 'self'; base-uri 'none'");return send(200,fs.readFileSync(path.join(__dirname,filename)),route==='/viewer'?'text/html; charset=utf-8':route.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8');
+        const filename=route==='/viewer'?'viewer.html':route.slice(1);res.setHeader('X-Frame-Options','SAMEORIGIN');res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; worker-src 'self'; connect-src 'self' blob:; font-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; object-src 'none'; frame-ancestors 'self'; base-uri 'none'");return send(200,fs.readFileSync(path.join(__dirname,filename)),route==='/viewer'?'text/html; charset=utf-8':route.endsWith('.js')?'text/javascript; charset=utf-8':'text/css; charset=utf-8');
       }
       if(/^\/pdfjs\/(build\/(pdf|pdf.worker)\.mjs|standard_fonts\/[a-zA-Z0-9_.-]+|cmaps\/[a-zA-Z0-9_.-]+)$/.test(route)&&req.method==='GET'){
         const filename=path.join(__dirname,'../node_modules/pdfjs-dist',route.slice(7));if(!fs.existsSync(filename))fail(404,'Recurso no encontrado.');return send(200,fs.readFileSync(filename),route.endsWith('.mjs')?'text/javascript; charset=utf-8':'application/octet-stream');
@@ -129,6 +133,17 @@ function createPortal(options={}) {
       if(demo&&write&&route.startsWith('/api/import/'))fail(403,'La demostración utiliza muestras. La importación de datos anteriores está disponible en el portal privado.');
       if(demo&&req.method==='PATCH'&&route.startsWith('/api/users/')&&store.read().demo.accountIds.includes(route.split('/').at(-1)))fail(403,'Los tres perfiles de demostración mantienen su cuenta y permisos.');
       if(route==='/api/logout'&&req.method==='POST'){store.db.prepare('DELETE FROM sessions WHERE token=?').run(session.token);res.setHeader('Set-Cookie',cookie('',0));return send(200,{ok:true});}
+      const brandingMatch=route.match(/^\/api\/venues\/([^/]+)\/(branding|logo|branding-preview\.pdf)$/);
+      if(brandingMatch){
+        const venue=branding.scoped(store,user,brandingMatch[1],req.method!=='GET');
+        if(brandingMatch[2]==='logo'&&req.method==='GET'){const logo=venue.branding?.logo;if(!logo)fail(404,'El espacio no tiene logotipo.');return send(200,Buffer.from(logo.base64,'base64'),logo.mimeType);}
+        if(brandingMatch[2]==='branding'&&req.method==='PATCH'){const result=branding.save(store,user,venue.id,await readJson(req,1500*1024));return send(200,{result,data:store.view(user)});}
+        if(brandingMatch[2]==='branding-preview.pdf'&&['GET','POST'].includes(req.method)){
+          const branded=req.method==='POST'?{...venue,branding:branding.values(venue,await readJson(req,1500*1024))}:venue;
+          res.setHeader('Content-Disposition','inline; filename="identidad-espacio.pdf"');
+          return send(200,await require('./pdf-design').brandingPreview(branded,demo),'application/pdf');
+        }
+      }
       if(route==='/api/password'&&req.method==='POST') {
         rateLimit('password:'+user.id,10);const data=await readJson(req);
         if(!await hashTask(()=>verifyPassword(data.currentPassword,user.passwordHash)))fail(400,'La contraseña actual no es correcta.');

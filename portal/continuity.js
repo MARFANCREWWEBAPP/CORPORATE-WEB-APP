@@ -18,6 +18,7 @@ function inventory(filename) {
       if(reference.sha256&&sha(file.bytes)!==reference.sha256)throw new Error('Un archivo no coincide con su huella.');
     }
     for(const event of state.events)for(const release of event.production?.releases||[])if(sha(JSON.stringify(release.snapshot))!==release.sha256)throw new Error('La huella de una orden de producción no coincide.');
+    for(const venue of state.venues)if(venue.branding?.logo&&sha(Buffer.from(venue.branding.logo.base64,'base64'))!==venue.branding.logo.sha256)throw new Error('La huella del logotipo no coincide.');
     const {outbox,resets,...business}=state;
     return {users:state.users.length,events:state.events.length,archived:state.events.filter(e=>['CANCELLED','NOT_ACCEPTED','COMPLETED'].includes(e.status)).length,files:files.length,orders:state.events.reduce((n,e)=>n+(e.production?.releases.length||0),0),changes:state.events.reduce((n,e)=>n+(e.changeRequests?.length||0),0),businessSha256:sha(JSON.stringify(business)),filesSha256:sha(JSON.stringify(files.map(f=>({id:f.id,eventId:f.eventId,sha256:sha(f.bytes)})))),sessions:db.prepare('SELECT COUNT(*) AS n FROM sessions').get().n};
   } finally {db.close();}

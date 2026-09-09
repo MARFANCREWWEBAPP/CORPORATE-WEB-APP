@@ -58,7 +58,7 @@ function snapshot(state,event,draft) {
   const users=eligible(state,event);
   return {
     event:{...core(event),id:event.id,finalClient:event.finalClient||'',contact:[event.contactFirstName,event.contactLastName].filter(Boolean).join(' '),email:event.email||'',phone:event.phone||''},
-    venue:{id:venue.id,name:venue.name,address:venue.address||'',technicalProfile:venue.technicalProfile||{},technicalUpdatedAt:venue.technicalUpdatedAt||null},
+    venue:{id:venue.id,name:venue.name,address:venue.address||'',branding:structuredClone(require('./branding').defaults(venue)),technicalProfile:venue.technicalProfile||{},technicalUpdatedAt:venue.technicalUpdatedAt||null},
     plan:{...structuredClone(draft),steps:draft.steps.map(s=>({...s,ownerName:users.some(u=>u.id===s.ownerId)?person(users.find(u=>u.id===s.ownerId)).name:'Sin acceso'})),plans:draft.planFileKeys.map(key=>{const f=event.documents.find(f=>f.fileKey===key);return {fileKey:key,name:f.displayName};})},
     participants:users.filter(u=>draft.requiredUserIds.includes(u.id)).map(person),
     acceptedBudget:budgetSummary(event.budgets.find(b=>b.id===event.acceptedBudgetId)),
@@ -260,32 +260,27 @@ async function productionPdf(store,user,eventId,releaseId,demo) {
   const state=store.read(),event=store.event(state,user,eventId);
   const release=event.production?.releases.find(r=>r.id===releaseId);
   if(!release)fail(404,'Orden de producción no encontrada.');
-  const PDFDocument=require('pdfkit'),doc=new PDFDocument({size:'A4',margin:42,bufferPages:true,info:{Title:'Orden de producción · '+event.eventName,Author:'Marquee Audiovisuales'}}),chunks=[];
-  const result=new Promise((resolve,reject)=>{doc.on('data',b=>chunks.push(b));doc.on('end',()=>resolve(Buffer.concat(chunks)));doc.on('error',reject);});
-  const s=release.snapshot;
-  const heading=label=>{doc.moveDown().font('Helvetica-Bold').fontSize(13).fillColor('#49317f').text(label);doc.fillColor('#222222').font('Helvetica').fontSize(10);};
-  const paragraph=value=>doc.text(String(value||'Sin especificar'),{lineGap:3});
-  doc.font('Helvetica-Bold').fontSize(20).fillColor('#49317f').text('MARQUEE AUDIOVISUALES');
-  doc.fontSize(16).text('Orden de producción V'+release.version);
-  doc.font('Helvetica').fontSize(10).fillColor('#222222');
-  if(demo)paragraph('DEMO · Datos ficticios');
-  if(CLOSED.includes(event.status))paragraph('EVENTO ARCHIVADO · Documento histórico');
-  if(currentRelease(event)?.id!==release.id||stale(state,event,release))paragraph('VERSIÓN HISTÓRICA O PENDIENTE DE ACTUALIZACIÓN · Consulta el portal');
-  heading(s.event.eventName);paragraph(s.venue.name+' · '+s.event.eventDate+' · '+(s.event.numberOfPeople||'Aforo por definir')+' asistentes');
-  paragraph(s.venue.address);paragraph('Cliente: '+(s.event.finalClient||'Por confirmar'));paragraph('Contacto: '+[s.event.contact,s.event.phone,s.event.email].filter(Boolean).join(' · '));
-  heading('Horario y responsables · hora local de Madrid');
-  for(const step of s.plan.steps)paragraph(step.date+' '+step.time+' · '+step.label+' · '+step.ownerName);
-  for(const [key,label]of [['instructions','Instrucciones de producción'],['material','Material y equipamiento'],['crew','Equipo técnico'],['contacts','Contactos de coordinación']]){heading(label);paragraph(s.plan[key]);}
-  heading('Necesidades técnicas');paragraph(s.event.technicalRequirements);
+  const {document,money,dateLabel}=require('./pdf-design'),s=release.snapshot;
+  const pdf=document({venue:s.venue,title:'Orden de producción',reference:'ORDEN V'+release.version,demo});
+  pdf.titleBlock(s.event.eventName,[['Espacio',s.venue.name],['Fecha',dateLabel(s.event.eventDate)],['Asistentes',s.event.numberOfPeople||'Por confirmar'],['Cliente',s.event.finalClient]]);
+  if(CLOSED.includes(event.status))pdf.notice('EVENTO ARCHIVADO · Documento histórico');
+  if(currentRelease(event)?.id!==release.id||stale(state,event,release))pdf.notice('VERSIÓN HISTÓRICA O PENDIENTE DE ACTUALIZACIÓN · Consulta el portal');
+  if(s.venue.address)pdf.paragraph(s.venue.address,{size:9});
+  pdf.paragraph('Contacto: '+([s.event.contact,s.event.phone,s.event.email].filter(Boolean).join(' · ')||'Por confirmar'),{size:9});
+  pdf.section('Horario y responsables · hora de Madrid');
+  pdf.table([{label:'Fecha / hora',width:100},{label:'Hito',width:pdf.width-260},{label:'Responsable',width:160}],s.plan.steps.map(step=>[dateLabel(step.date)+' · '+step.time,step.label,step.ownerName]));
+  for(const [key,label]of [['instructions','Instrucciones de producción'],['material','Material y equipamiento'],['crew','Equipo técnico'],['contacts','Contactos de coordinación']]){pdf.section(label);pdf.paragraph(s.plan[key]);}
+  pdf.section('Necesidades técnicas');pdf.paragraph(s.event.technicalRequirements);
   const labels={spaces:'Salas',loadingAccess:'Acceso de carga',loadingHours:'Horario de carga',power:'Potencia eléctrica',soundRestrictions:'Restricciones de sonido',ceilingHeight:'Altura',wifi:'Conexión',stage:'Escenario',parking:'Aparcamiento',plans:'Planos',contacts:'Contactos',restrictions:'Otras restricciones'};
-  heading('Ficha técnica del espacio');for(const [key,label]of Object.entries(labels))if(s.venue.technicalProfile[key])paragraph(label+': '+s.venue.technicalProfile[key]);
-  heading('Documentos de referencia');
-  paragraph(s.acceptedBudget?'Presupuesto aceptado V'+s.acceptedBudget.version+' · '+s.acceptedBudget.name:'Sin presupuesto aceptado adjunto');
-  if(s.currentBudget&&s.currentBudget.id!==s.acceptedBudget?.id)paragraph('Último presupuesto publicado V'+s.currentBudget.version+' · Revisar su aceptación en el portal');
-  for(const plan of s.plan.plans)paragraph('Plano/documento: '+plan.name);
-  for(const extra of s.extras)paragraph('Cambio aprobado: '+extra.title+' · '+new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR'}).format(extra.amountCents/100)+' (impuestos incluidos)');
-  heading('Control de versión');paragraph('Publicada: '+release.publishedAt+' por '+release.publishedBy.name);paragraph('Huella de la orden: '+release.sha256);
-  const range=doc.bufferedPageRange();for(let i=0;i<range.count;i++){doc.switchToPage(i);doc.fontSize(8).fillColor('#666666').text('V'+release.version+' · '+(i+1)+' / '+range.count,42,800,{lineBreak:false});}
-  doc.end();return result;
+  pdf.section('Ficha técnica del espacio');
+  const technical=Object.entries(labels).filter(([key])=>s.venue.technicalProfile[key]);
+  if(technical.length)for(const [key,label]of technical){pdf.paragraph(label,{bold:true,size:9,gap:3});pdf.paragraph(s.venue.technicalProfile[key]);}else pdf.paragraph('Ficha técnica pendiente de completar.');
+  pdf.section('Documentos de referencia');
+  pdf.paragraph(s.acceptedBudget?'Presupuesto aceptado V'+s.acceptedBudget.version+' · '+s.acceptedBudget.name:'Sin presupuesto aceptado adjunto');
+  if(s.currentBudget&&s.currentBudget.id!==s.acceptedBudget?.id)pdf.paragraph('Último presupuesto publicado V'+s.currentBudget.version+' · Revisar su aceptación en el portal');
+  for(const plan of s.plan.plans)pdf.paragraph('Plano/documento: '+plan.name);
+  if(s.extras.length){pdf.section('Cambios aprobados');for(const extra of s.extras)pdf.paragraph(extra.title+' · '+money(extra.amountCents)+' (impuestos incluidos)');}
+  pdf.section('Control de versión');pdf.paragraph('Publicada: '+release.publishedAt+' por '+release.publishedBy.name,{size:9});pdf.paragraph('Huella de la orden: '+release.sha256,{size:8});
+  return pdf.finish();
 }
 module.exports={install,getProduction,productionPdf,CHANGE_FIELDS,STAGES,basis,sha,currentRelease};
