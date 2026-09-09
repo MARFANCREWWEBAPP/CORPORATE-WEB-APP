@@ -7,7 +7,7 @@ const money=cents=>new Intl.NumberFormat('es-ES',{style:'currency',currency:'EUR
 const dateLabel=value=>/^\d{4}-\d{2}-\d{2}$/.test(value||'')?value.split('-').reverse().join('/'):String(value||'Por confirmar');
 const plain=value=>String(value??'').replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/g,'');
 function document({venue,title,reference='',demo=false}){
-  const brand=defaults(venue),doc=new PDFDocument({size:'A4',margins:{top:118,left:44,right:44,bottom:80},bufferPages:true,info:{Title:title,Author:'B2BE · Marquee Audiovisuales'}}),chunks=[];
+  const brand=defaults(venue),doc=new PDFDocument({size:'A4',margins:{top:118,left:44,right:44,bottom:80},bufferPages:true,info:{Title:title,Author:'Marquee Audiovisuales · B2BE'}}),chunks=[];
   const result=new Promise((resolve,reject)=>{doc.on('data',b=>chunks.push(b));doc.on('end',()=>resolve(Buffer.concat(chunks)));doc.on('error',reject);});
   const rgb=brand.accent.slice(1).match(/../g).map(v=>parseInt(v,16)/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);
   const accentText=(rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722)>.183?INK:brand.accent;
@@ -18,7 +18,7 @@ function document({venue,title,reference='',demo=false}){
     if(brand.logo?.base64&&brand.logoBackground!=='white')doc.roundedRect(40,25,174,60,5).fill(brand.logoBackground==='accent'?brand.accent:INK);
     if(brand.logo?.base64)doc.image(Buffer.from(brand.logo.base64,'base64'),44,29,{fit:[166,52],align:'left',valign:'center'});
     else font(16,true).text(plain(brand.displayName),44,34,{width:260,height:43,ellipsis:true});
-    doc.image(path.join(__dirname,'assets/b2be-logo.png'),doc.page.width-166,30,{fit:[122,43],align:'right'});
+    doc.image(path.join(__dirname,'assets/marquee-b2be-logo.png'),doc.page.width-166,30,{fit:[122,43],align:'right'});
     font(8,false,MUTED).text(plain(brand.logo?brand.displayName:brand.tagline),44,87,{width:width-140,height:12,ellipsis:true});
     font(8,false,MUTED).text(plain(reference),doc.page.width-210,87,{width:166,align:'right',height:12,ellipsis:true});
     doc.moveTo(44,105).lineTo(doc.page.width-44,105).strokeColor('#dfe4ea').lineWidth(.7).stroke();doc.x=44;doc.y=118;
@@ -70,7 +70,7 @@ function document({venue,title,reference='',demo=false}){
       doc.switchToPage(i);const savedBottom=doc.page.margins.bottom;doc.page.margins.bottom=0;const y=doc.page.height-61;doc.moveTo(44,y-8).lineTo(doc.page.width-44,y-8).strokeColor('#dfe4ea').lineWidth(.7).stroke();
       font(8,false,MUTED).text(plain(brand.footer||brand.displayName),44,y,{width:width-85,height:25,lineGap:2,ellipsis:true});
       font(8,false,MUTED).text((i-range.start+1)+' / '+range.count,doc.page.width-110,y,{width:66,lineBreak:false,align:'right'});
-      font(7,false,MUTED).text('B2BE by Marquee · Gestión y producción de eventos',44,doc.page.height-24,{lineBreak:false});doc.page.margins.bottom=savedBottom;
+      font(7,false,MUTED).text('Marquee · B2BE · Gestión y producción de eventos',44,doc.page.height-24,{lineBreak:false});doc.page.margins.bottom=savedBottom;
     }
     doc.end();return result;
   }
