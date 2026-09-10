@@ -1,6 +1,6 @@
 'use strict';
 const crypto=require('node:crypto');
-const {id,now,text,fail,ops}=require('./store');
+const {id,now,text,fail,ops,admin}=require('./store');
 const {context}=require('./reliability');
 function createIntegrations(store,env,fetcher=fetch){
   const demo=env.DEMO_MODE==='1';
@@ -9,6 +9,7 @@ function createIntegrations(store,env,fetcher=fetch){
   async function json(url,headers,body){const response=await fetcher(url,{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body),signal:AbortSignal.timeout(25000)});if(!response.ok)throw new Error('El proveedor no confirmó la operación ('+response.status+').');return response.json();}
   async function run(user,eventId,kind,data,key){
     if(!['odoo','whatsapp','assistant'].includes(kind))fail(404,'Conexión no disponible.');
+    if(kind==='whatsapp')admin(user);
     if(kind!=='assistant'&&!ops(user))fail(403,'Solo Marquee utiliza esta conexión.');
     const visible=store.view(user),event=visible.events.find(e=>e.id===eventId);if(!event)fail(404,'Evento no encontrado.');
     if(!demo&&!configured[kind])fail(503,'Esta conexión está pendiente de configurar con la cuenta de Marquee.');

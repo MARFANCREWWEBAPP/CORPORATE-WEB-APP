@@ -131,7 +131,9 @@ class Store {
     state.organizations=state.organizations.filter(o=>ops(user)||state.venues.some(v=>v.organizationId===o.id));
     if(!ops(user))state.resources=[];
     delete state.outbox; delete state.resets;
-    if (user.role!=='ADMIN') state.audit=[];
+    // Channel credentials and client correspondence are available only through dedicated admin endpoints.
+    delete state.communicationSettings; delete state.customerMessages;
+    if (user.role!=='ADMIN') {state.audit=[];for(const event of state.events)event.history=event.history.filter(h=>h.action!=='CUSTOMER_MESSAGE');}
     return state;
   }
   venue(state, venueId) { const venue=state.venues.find(v=>v.id===venueId); if (!venue || venue.state!=='ACTIVE') fail(400,'Selecciona un espacio de eventos activo.'); return venue; }
