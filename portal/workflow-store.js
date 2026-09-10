@@ -48,7 +48,7 @@ function install(Store) {
   });};
   Store.prototype.messageDraft=function(user,eventId,data){return this.transaction(user,'MESSAGE_DRAFT_SAVED',state=>{
     this.event(state,user,eventId);let draft=state.messageDrafts.find(d=>d.userId===user.id&&d.eventId===eventId);
-    if(draft&&data.revision!==draft.revision)fail(409,'El borrador de mensaje cambió en otro dispositivo.');
+    if(draft?data.revision!==draft.revision:data.revision!=null)throw Object.assign(new Error('El borrador de mensaje cambió en otro dispositivo. Revisa ambas versiones.'),{status:409,details:{kind:'message-draft',draft:draft||null}});
     if(!draft){draft={id:id(),userId:user.id,eventId,revision:0};state.messageDrafts.push(draft);}Object.assign(draft,{body:text(data.body,20000),revision:draft.revision+1,updatedAt:now()});return draft;
   });};
   Store.prototype.budgetDecision=function(user,eventId,budgetId,data){return this.transaction(user,'BUDGET_DECIDED',state=>{

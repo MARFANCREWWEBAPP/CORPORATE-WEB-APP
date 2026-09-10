@@ -17,7 +17,7 @@ function buildPortal() {
   html=html.replace(/const LOGO_DARK = [^;]+;/,"const LOGO_DARK = '/brand/b2be-logo.png';").replace(/const LOGO_WHITE = [^;]+;/,"const LOGO_WHITE = '/brand/b2be-logo.png';");
   // Place the storage facade in the same lexical scope as the original application.
   replace(/  function loadData\(\)/g,memory+'  function loadData()',1);
-  let bridge=fs.readFileSync(path.join(__dirname,'client.js'),'utf8');
+  let bridge=fs.readFileSync(path.join(__dirname,'draft-buffer.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client.js'),'utf8');
   bridge=bridge.replace('  portalBoot();',fs.readFileSync(path.join(__dirname,'client-workflows.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client-operations.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client-production.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client-branding.js'),'utf8')+'\n'+fs.readFileSync(path.join(__dirname,'client-reservations.js'),'utf8')+'\n  portalBoot();');
   replace(/  const initialPage = location.hash.replace/g,bridge+'\n  const initialPage = location.hash.replace',1);
   const styles=fs.readFileSync(path.join(__dirname,'portal.css'),'utf8');

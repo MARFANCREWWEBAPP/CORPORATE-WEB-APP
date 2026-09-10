@@ -285,9 +285,12 @@ class Store {
       const event=this.event(state,user,eventId);
       if (data.internal && !ops(user)) fail(403,'Acceso no permitido.');
       const comment={id:id(),authorId:user.id,body:text(data.body,20000,true),createdAt:now()};
+      const draft=!data.internal&&state.messageDrafts.find(d=>d.userId===user.id&&d.eventId===event.id);
+      if(!data.internal&&data.draftRevision!==undefined&&(!draft||draft.revision!==data.draftRevision||draft.body!==comment.body))throw Object.assign(new Error('El borrador ha cambiado. Revisa el texto antes de enviarlo.'),{status:409,details:{kind:'message-draft',draft:draft||null}});
       event[data.internal?'internalNotes':'comments'].push(comment);
       this.history(event,user,data.internal?'Se añadió una nota interna':'Se añadió un mensaje compartido',data.internal?'INTERNAL_NOTE_ADDED':'COMMENT_ADDED',Boolean(data.internal));
-      if(!data.internal)state.messageDrafts=state.messageDrafts.filter(d=>d.userId!==user.id||d.eventId!==event.id);
+      // Keep a blank revision so an old autosave cannot resurrect a sent message.
+      if(draft&&draft.body===comment.body)Object.assign(draft,{body:'',revision:draft.revision+1,updatedAt:now()});
       if(!data.internal)this.notify(state,event,user,'Nuevo mensaje',comment.body.slice(0,150),'NEW_COMMENT');return comment;
     });
   }
