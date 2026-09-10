@@ -133,7 +133,8 @@
       if(['login-form','portal-setup-form','portal-password-form'].includes(form.id)){
         if(form.id==='portal-password-form'&&data.password!==data.confirmPassword)throw new Error('Las contraseñas nuevas no coinciden.');
         const result=await portalApi(form.id==='login-form'?'/login':form.id==='portal-setup-form'?'/bootstrap':'/password','POST',{...data,...(form.id==='portal-setup-form'?{token:portalSetupToken}:{})});
-        portalCsrf=result.csrf;portalAccount=result.user;portalSetup=false;app.session=null;app.data=loadData();app.modal=null;app.selectedEventId=null;app.v4WizardDraft={};portalMemoryValues.clear();
+        const wizard=auditState.ownerId===result.user.id?app.v4WizardDraft:{};if(auditState.ownerId!==result.user.id)auditReset();auditState.ownerId=result.user.id;
+        portalCsrf=result.csrf;portalAccount=result.user;portalSetup=false;app.session=null;app.data=loadData();app.modal=null;app.selectedEventId=null;app.v4WizardDraft=wizard;portalMemoryValues.clear();
         if(!portalAccount.mustChangePassword){await portalReload(false);app.page='dashboard';history.replaceState(null,'','#dashboard');}renderShell();return;
       }
       if(form.id==='portal-space-form'){
@@ -158,7 +159,7 @@
     if(action==='portal-clear-filters'){Object.assign(portalFilters,{venue:'',from:'',to:'',q:''});renderShell();return;}
     if(['reset-demo','confirm-reset-demo','confirm-delete-event','trigger-import-backup','confirm-restore-snapshot','delete-snapshot'].includes(action)){toast('Datos conservados','El portal no permite borrar expedientes ni reemplazar los datos desde el navegador.');return;}
     portalRun(async()=>{
-      if(action==='logout'){auditReset();await portalApi('/logout','POST',{});portalCsrf=null;portalAccount=null;app.session=null;app.data=loadData();app.selectedEventId=null;app.modal=null;app.v4Modal=null;app.v4WizardDraft={};portalCredentials=null;portalMemoryValues.clear();Object.assign(portalFilters,{venue:'',from:'',to:'',q:''});history.replaceState(null,'',location.pathname);renderShell();return;}
+      if(action==='logout'){await auditSavePending();await portalApi('/logout','POST',{});auditReset();portalCsrf=null;portalAccount=null;app.session=null;app.data=loadData();app.selectedEventId=null;app.modal=null;app.v4Modal=null;app.v4WizardDraft={};portalCredentials=null;portalMemoryValues.clear();Object.assign(portalFilters,{venue:'',from:'',to:'',q:''});history.replaceState(null,'',location.pathname);renderShell();return;}
       if(action==='toggle-user'){const user=userById(target.dataset.id);await portalMutation('/users/'+user.id,'PATCH',{active:!user.active});}
       if(action==='mark-all-read')await portalMutation('/notifications/read','POST',{});
       if(action==='open-notification'){const item=app.data.notifications.find(n=>n.id===target.dataset.id);await portalMutation('/notifications/read','POST',{id:item.id});if(item.eventId){app.selectedEventId=item.eventId;app.selectedEventTab=item.type==='BUDGET_AVAILABLE'?'budgets':'summary';}}
@@ -172,9 +173,9 @@
     });
   },true);
   window.addEventListener('change',event=>{const target=event.target;if(target.matches?.('[data-v4-change="waitingOn"]')){event.preventDefault();event.stopImmediatePropagation();portalRun(async()=>{await portalMutation('/events/'+target.dataset.id,'PATCH',{waitingOn:target.value,revision:eventById(target.dataset.id).revision});renderShell();});}},true);
-  window.addEventListener('input',event=>{if(event.target.closest?.('form'))portalDirty=true;},true);
-  window.addEventListener('beforeunload',event=>{if(portalDirty||portalBusy){event.preventDefault();event.returnValue='';}});
+  window.addEventListener('input',event=>{if(event.target.closest?.('form')&&!event.target.closest('#new-event-form,#comment-form'))portalDirty=true;},true);
+  window.addEventListener('beforeunload',event=>{if(auditHasUnsaved()||portalBusy){event.preventDefault();event.returnValue='';}});
   window.addEventListener('hashchange',()=>{const token=new URLSearchParams(location.hash.slice(1)).get('setup');if(token){portalSetupToken=token;history.replaceState(null,'',location.pathname);if(!portalAccount)renderShell();}});
   const portalBoot=async()=>{try{const result=await portalApi('/session');portalCsrf=result.csrf;portalAccount=result.user;portalSetup=result.setupRequired;portalSetupEmail=result.setupEmail||'';portalDemo=result.demo||null;if(portalAccount&&!portalAccount.mustChangePassword)await portalReload(false);portalReady=true;const page=location.hash.slice(1);if(currentUser()&&page)app.page=safePage(page,currentUser());renderShell();}catch(error){portalReady=true;renderLogin();const box=document.getElementById('login-error');box.style.display='block';box.textContent='No se pudo conectar con el servidor. Recarga la página para volver a intentarlo.';}};
   portalBoot();
-  setInterval(async()=>{if(!portalAccount||portalAccount.mustChangePassword||portalBusy||portalDirty||document.hidden||app.modal||app.selectedEventId||app.page==='new-event')return;try{const {data}=await portalApi('/state');if(data.revision!==app.data.revision){app.data=data;ensureV4Data();renderShell();}}catch{}},15000);
+  setInterval(async()=>{if(!portalAccount||portalAccount.mustChangePassword||portalBusy||auditHasUnsaved()||document.hidden||app.modal||app.selectedEventId||app.page==='new-event')return;try{const {data}=await portalApi('/state');if(data.revision!==app.data.revision){app.data=data;ensureV4Data();renderShell();}}catch{}},15000);

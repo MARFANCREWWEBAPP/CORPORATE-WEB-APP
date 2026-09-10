@@ -68,11 +68,25 @@ test('Version-bound budget decisions, monetary amounts, schedule conflicts and p
   await ok(a.request('/events/'+other.id,'PATCH',{status:'CONFIRMED',revision:other.revision,conflictReason:'Se incorpora un técnico de refuerzo'}));
   const messageHeaders={'Idempotency-Key':crypto.randomUUID()};await ok(one.c.request('/events/'+e.id+'/message-draft','POST',{body:'Mensaje pendiente'}));
   await ok(one.c.request('/events/'+e.id+'/comments','POST',{body:'Mensaje definitivo'},messageHeaders));await ok(one.c.request('/events/'+e.id+'/comments','POST',{body:'Mensaje definitivo'},messageHeaders));
-  assert.equal(portal.store.read().events.find(x=>x.id===e.id).comments.length,1);assert.equal(portal.store.read().messageDrafts.length,0);
+  assert.equal(portal.store.read().events.find(x=>x.id===e.id).comments.length,1);assert.equal(portal.store.read().messageDrafts[0].body,'Mensaje pendiente','Sending a different message must preserve the other unsent draft');
   const thirdEvent=(await ok(one.c.request('/events','POST',{eventName:'Rechazado',eventDate:'2027-11-21'}))).result;
   const b3=(await ok(a.request('/events/'+thirdEvent.id+'/files','POST',{kind:'budgets',status:'SENT',originalName:'Presupuesto.pdf',base64:pdf.toString('base64'),amount:100}))).result;
   await ok(one.c.request('/events/'+thirdEvent.id+'/budgets/'+b3.id+'/decision','POST',{decision:'REJECTED',reason:'Sin presupuesto disponible',revision:portal.store.read().events.find(e=>e.id===thirdEvent.id).revision}));
   assert.ok(portal.store.read().events.find(e=>e.id===thirdEvent.id).archivedAt);
+});
+test('Message drafts preserve device conflicts and prevent delayed autosaves from resurrecting sent text',async t=>{
+  const {space,ok,portal}=await fixture(t),one=await space('Uno','draft-one@spaces.test'),two=await space('Dos','draft-two@spaces.test');
+  const e=(await ok(one.c.request('/events','POST',{eventName:'Ensayo de mensajes',eventDate:'2028-03-01'}))).result,route='/events/'+e.id;
+  const first=(await ok(one.c.request(route+'/message-draft','POST',{body:'Texto inicial'}))).result;
+  const second=(await ok(one.c.request(route+'/message-draft','POST',{body:'Edición del otro dispositivo',revision:first.revision}))).result;
+  const stale=await one.c.request(route+'/message-draft','POST',{body:'Texto pendiente en esta pestaña',revision:first.revision});assert.equal(stale.status,409);assert.equal(stale.data.details.draft.body,second.body);
+  assert.equal((await one.c.request(route+'/comments','POST',{body:first.body,draftRevision:first.revision})).status,409);assert.equal(portal.store.read().events.find(x=>x.id===e.id).comments.length,0);
+  const denied=await two.c.request(route+'/message-draft','POST',{body:'Otro espacio',revision:second.revision});assert.equal(denied.status,404);assert.ok(!JSON.stringify(denied.data).includes(second.body));
+  const send={'Idempotency-Key':crypto.randomUUID()},body={body:second.body,draftRevision:second.revision};
+  const original=(await ok(one.c.request(route+'/comments','POST',body,send))).result,retry=(await ok(one.c.request(route+'/comments','POST',body,send))).result;assert.equal(retry.id,original.id);
+  const cleared=portal.store.read().messageDrafts.find(d=>d.eventId===e.id);assert.equal(cleared.body,'');assert.ok(cleared.revision>second.revision);
+  assert.equal((await one.c.request(route+'/message-draft','POST',{body:second.body,revision:second.revision})).status,409);
+  assert.equal(portal.store.read().messageDrafts.find(d=>d.eventId===e.id).body,'');assert.equal(portal.store.read().events.find(x=>x.id===e.id).comments.length,1);
 });
 test('Second factor, single-use recovery and durable email outbox',async t=>{
   const {a,ok,portal,client,sent,space}=await fixture(t,{RESEND_API_KEY:'test-provider-key',MAIL_FROM:'Marquee <no-reply@example.test>'});
