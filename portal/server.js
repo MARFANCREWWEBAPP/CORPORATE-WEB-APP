@@ -60,6 +60,7 @@ function createPortal(options={}) {
   let security,recovery,mailer;try{security=createSecurity(store,env);recovery=reliability.createRecovery(store,env,options.backupFetch);mailer=createMail(store,env,security,options.mailFetch);}catch(error){store.close();throw error;}
   const objectStorage=require('./object-storage').createObjectStorage(store,env,options.objectFetch);
   const integrations=require('./integrations').createIntegrations(store,env,options.integrationFetch);
+  const customerCommunications=require('./customer-communications').createCustomerCommunications(store,env,security,{transport:options.smtpTransport,fetch:options.integrationFetch,mailFetch:options.customerMailFetch});
   const continuity=require('./continuity').createContinuity(store,recovery,env,options.backupFetch);
   const automation=operations.createAutomation(store);
   if(!options.noAutomaticBackup)automation.run();
@@ -92,7 +93,7 @@ function createPortal(options={}) {
       if(req.headers['idempotency-key']&&!/^[a-zA-Z0-9_-]{16,100}$/.test(req.headers['idempotency-key']))fail(400,'Identificador de envío no válido.');
       const clientIp=reliability.clientAddress(req,env);
       const url=new URL(req.url,origin),route=url.pathname;
-      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.5.5-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
+      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.5.6-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
       if(production&&env.CANONICAL_HOST_REDIRECT==='1'&&['GET','HEAD'].includes(req.method)&&req.headers.host!==new URL(origin).host){const destination=new URL(origin);destination.pathname=url.pathname;destination.search=url.search;res.writeHead(308,{Location:destination.href});return res.end();}
       if(route==='/brand/b2be-logo.png'&&['GET','HEAD'].includes(req.method)){res.setHeader('Cache-Control','public, max-age=0, must-revalidate');res.setHeader('ETag',masterLogoTag);return send(req.headers['if-none-match']===masterLogoTag?304:200,req.headers['if-none-match']===masterLogoTag?Buffer.alloc(0):masterLogo,'image/png');}
       if(['/','/index.html'].includes(route)&&['GET','HEAD'].includes(req.method)) {
@@ -182,7 +183,12 @@ function createPortal(options={}) {
       if(route==='/api/calendar/revoke'&&req.method==='POST'){await readJson(req);store.transaction(user,'CALENDAR_SUBSCRIPTION_REVOKED',state=>{delete state.users.find(u=>u.id===user.id).calendarTokenHash;});return send(200,{ok:true});}
       if(route==='/api/operations/rules'&&req.method==='GET'){admin(user);return send(200,{rules:operations.rules(store.read())});}
       if(route==='/api/operations/rules'&&req.method==='PATCH')return send(200,{result:store.saveRules(user,await readJson(req)),data:store.view(user)});
-      if(route==='/api/services'&&req.method==='GET'){admin(user);return send(200,{recovery:recovery.status(),mail:mailer.status(),documents:objectStorage.status()});}
+      if(route==='/api/services'&&req.method==='GET'){admin(user);return send(200,{recovery:recovery.status(),mail:mailer.status(),customerMail:customerCommunications.status(user).mail,documents:objectStorage.status()});}
+      if(route==='/api/admin/communications'&&req.method==='GET')return send(200,customerCommunications.status(user));
+      if(route==='/api/admin/communications/messages'&&req.method==='GET')return send(200,{messages:customerCommunications.list(user)});
+      if(['/api/admin/communications/mail','/api/admin/communications/whatsapp'].includes(route)&&req.method==='PATCH'){admin(user);rateLimit('channel-config:'+user.id,10);const data=await readJson(req);const result=route.endsWith('/mail')?await customerCommunications.saveMail(user,data):await customerCommunications.saveWhatsApp(user,data);makeBackup('configuración de comunicaciones');return send(200,result);}
+      const customerMatch=route.match(/^\/api\/events\/([^/]+)\/customer-communications(?:\/(email|whatsapp|whatsapp-open))?$/);
+      if(customerMatch){admin(user);const eventId=customerMatch[1],channel=customerMatch[2];if(!channel&&req.method==='GET')return send(200,{preview:customerCommunications.preview(user,eventId),messages:customerCommunications.list(user,eventId)});if(channel&&req.method==='POST'){rateLimit('customer-message:'+user.id,30);const data=await readJson(req);const result=channel==='email'?await customerCommunications.sendEmail(user,eventId,data):channel==='whatsapp'?await customerCommunications.sendWhatsApp(user,eventId,data):customerCommunications.prepareWhatsApp(user,eventId,data);return send(200,{result});}}
       if(route==='/api/continuity'&&req.method==='GET'){admin(user);return send(200,continuity.status());}
       if(route==='/api/continuity/drill'&&req.method==='POST'){admin(user);const result=await continuity.drill(user,await readJson(req));return send(200,{result,data:store.view(user)});}
       if(route==='/api/state'&&req.method==='GET')return send(200,{data:store.view(user)});
@@ -222,9 +228,9 @@ function createPortal(options={}) {
       }
       if(route==='/api/documents/replicas/review'&&req.method==='GET')return send(200,objectStorage.review(user));
       if(route==='/api/documents/replicas/copy'&&req.method==='POST'){const result=await objectStorage.copyReviewed(user,await readJson(req));return send(200,{result,data:store.view(user)});}
-      if(route==='/api/integrations'&&req.method==='GET')return send(200,integrations.status());
+      if(route==='/api/integrations'&&req.method==='GET'){const state=integrations.status();if(user.role!=='ADMIN')delete state.services.whatsapp;else state.services.whatsapp=customerCommunications.status(user).whatsapp.configured?'configured':demo?'demo':'pending';return send(200,state);}
       const integrationMatch=route.match(/^\/api\/events\/([^/]+)\/integrations\/(odoo|whatsapp|assistant)$/);
-      if(integrationMatch&&req.method==='POST'){rateLimit('integration:'+user.id,20);const result=await integrations.run(user,integrationMatch[1],integrationMatch[2],await readJson(req),req.headers['idempotency-key']);return send(200,{result,data:store.view(user)});}
+      if(integrationMatch&&req.method==='POST'){if(integrationMatch[2]==='whatsapp'){admin(user);fail(410,'Abre Correo y WhatsApp desde administración para revisar los destinatarios.');}rateLimit('integration:'+user.id,20);const result=await integrations.run(user,integrationMatch[1],integrationMatch[2],await readJson(req),req.headers['idempotency-key']);return send(200,{result,data:store.view(user)});}
       const generatedMatch=route.match(/^\/api\/events\/([^/]+)\/generate-budget$/);
       if(generatedMatch&&req.method==='POST'){const result=await require('./commercial').generate(store,user,generatedMatch[1],await readJson(req),demo);return send(200,{result,data:store.view(user)});}
       const scheduleMatch=route.match(/^\/api\/events\/([^/]+)\/availability$/);
@@ -285,7 +291,7 @@ function createPortal(options={}) {
   }));
   server.requestTimeout=45000;server.headersTimeout=15000;server.maxRequestsPerSocket=1000;
   server.on('close',()=>{if(automationTimer)clearInterval(automationTimer);if(backupTimer)clearInterval(backupTimer);if(mailTimer)clearInterval(mailTimer);store.close();});
-  return {server,store,origin,recovery,mailer,security,automation,integrations,objectStorage,continuity,closeStreams:()=>{for(const response of streams)response.end();}};
+  return {server,store,origin,recovery,mailer,security,automation,integrations,objectStorage,continuity,customerCommunications,closeStreams:()=>{for(const response of streams)response.end();}};
 }
 function start() {
   const port=Number(process.env.PORT||3000);if(!Number.isInteger(port)||port<1||port>65535)throw new Error('PORT no válido.');

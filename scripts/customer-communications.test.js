@@ -1,0 +1,75 @@
+'use strict';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
+const {privateFixture}=require('./private-fixture');
+const {createPortal}=require('../portal/server');
+const {createCustomerCommunications}=require('../portal/customer-communications');
+const {Store}=require('../portal/store');
+const {verifyRecovery}=require('../portal/reliability');
+async function fixture(t){
+  const directory=fs.mkdtempSync(path.join(os.tmpdir(),'marquee-customer-mail-')),data=await privateFixture(directory),password=data.password;data.store.close();
+  const sent=[],meta=[],env={APP_ORIGIN:'http://portal.test',DATA_DIR:directory,PORTAL_SECRET_KEY:crypto.randomBytes(32).toString('base64')};
+  const behavior={verifyError:null,sendError:null,partial:false,phone:'+34 645 252 250',templateStatus:'APPROVED',pending:null};
+  const smtpTransport=opts=>{assert.equal(opts.host,'smtp.ionos.es');assert.equal(opts.port,465);assert.equal(opts.secure,true);assert.equal(opts.tls.rejectUnauthorized,true);assert.equal(opts.disableUrlAccess,true);return {async verify(){if(behavior.verifyError)throw behavior.verifyError;assert.equal(opts.auth.user,'info@marquee.es');assert.equal(opts.auth.pass,'smtp-test-secret');return true;},async sendMail(message){sent.push(message);if(behavior.pending)await behavior.pending;if(behavior.sendError)throw behavior.sendError;return {accepted:behavior.partial?[message.to[0]]:message.envelope.to,rejected:behavior.partial?[message.cc[0]]:[],messageId:message.messageId};},close(){}};};
+  const integrationFetch=async(url,request)=>{meta.push({url,request});if(request.method==='POST')return {ok:true,json:async()=>({messages:[{id:'wamid.test'}]})};return {ok:true,json:async()=>url.includes('/phone_numbers')?{data:[{id:'123',display_phone_number:behavior.phone}]}:{data:[{name:'marquee_update',language:'es',status:behavior.templateStatus,components:[{type:'BODY',text:'Evento {{1}}. Próxima acción: {{2}}.'}]}]}};};
+  const portal=createPortal({env,noAutomaticBackup:true,noAutomaticMail:true,smtpTransport,integrationFetch});
+  portal.store.transaction(null,'TEST_CONTACTS',s=>{s.venues[0].email='venue@example.test';Object.assign(s.events[0],{email:'client@example.test',phone:'612345678'});s.users.forEach(u=>u.mustChangePassword=false);});
+  const users=portal.store.read().users,admin=users.find(u=>u.role==='ADMIN'),commercial=users.find(u=>u.role==='COMMERCIAL'),venue=users.find(u=>u.role==='VENUE_USER');
+  await new Promise(resolve=>portal.server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+portal.server.address().port;
+  t.after(async()=>{portal.closeStreams();await new Promise(resolve=>portal.server.close(resolve));fs.rmSync(directory,{recursive:true,force:true});});
+  const client=async user=>{let cookie='',csrf='';const request=async(route,method='GET',body,headers={})=>{const response=await fetch(base+'/api'+route,{method,headers:{Origin:env.APP_ORIGIN,'Content-Type':'application/json',Cookie:cookie,'X-CSRF-Token':csrf,...headers},body:body===undefined?undefined:JSON.stringify(body)});if(response.headers.get('set-cookie'))cookie=response.headers.get('set-cookie').split(';')[0];const result=await response.json();if(result.csrf)csrf=result.csrf;return {status:response.status,data:result};};assert.equal((await request('/login','POST',{email:user.email,password})).status,200);return request;};
+  const service=portal.customerCommunications,preview=()=>service.preview(admin,data.eventId);
+  const emailData=()=>({...preview(),operationId:crypto.randomUUID(),subject:'Propuesta de ensayo',body:'Mensaje de ensayo privado',confirm:true,attachBudget:true});
+  const mailSetup=()=>service.saveMail(admin,{revision:service.status(admin).revision,from:'info@marquee.es',name:'Marquee',password:'smtp-test-secret',enabled:true});
+  const waSetup=()=>service.saveWhatsApp(admin,{revision:service.status(admin).revision,businessId:'456',phoneId:'123',token:'meta-test-secret',template:'marquee_update',language:'es',apiVersion:'v23.0',enabled:true});
+  return {portal,env,directory,admin,commercial,venue,client,sent,meta,behavior,service,preview,emailData,mailSetup,waSetup,eventId:data.eventId};
+}
+test('Only administrators can configure, inspect or use client email and WhatsApp, including legacy routes',async t=>{
+  const f=await fixture(t);await f.mailSetup();const admin=await f.client(f.admin);
+  for(const u of [f.commercial,f.venue]){const call=await f.client(u);for(const [route,method,body]of [['/admin/communications','GET'],['/admin/communications/messages','GET'],['/admin/communications/mail','PATCH',{}],['/admin/communications/whatsapp','PATCH',{}],['/events/'+f.eventId+'/customer-communications','GET'],['/events/'+f.eventId+'/customer-communications/email','POST',{}],['/events/'+f.eventId+'/customer-communications/whatsapp-open','POST',{}],['/events/'+f.eventId+'/customer-communications/whatsapp','POST',{}],['/events/'+f.eventId+'/integrations/whatsapp','POST',{}]])assert.equal((await call(route,method,body)).status,403,route);assert.ok(!('whatsapp' in (await call('/integrations')).data.services));}
+  assert.equal((await admin('/admin/communications/mail','PATCH',{},{'X-CSRF-Token':''})).status,403);
+  for(const user of [f.admin,f.commercial,f.venue]){const view=JSON.stringify(f.portal.store.view(user));assert.ok(!view.includes('smtp-test-secret'));assert.ok(!view.includes('communicationSettings'));assert.ok(!view.includes('customerMessages'));}
+  const configuration=(await admin('/admin/communications')).data;assert.equal(configuration.mail.configured,true);assert.ok(!JSON.stringify(configuration).includes('secret'));assert.ok(!JSON.stringify(f.portal.store.read()).includes('smtp-test-secret'));assert.equal(f.sent.length,0,'Verification must not send emails');
+});
+test('Email sends the reviewed client and mandatory venue CC with exact current PDF and safe sender, once only',async t=>{
+  const f=await fixture(t);await f.mailSetup();const request=f.emailData();const result=await f.service.sendEmail(f.admin,f.eventId,request);assert.equal(result.status,'SUBMITTED');assert.equal(f.sent.length,1);
+  const sent=f.sent[0];assert.deepEqual(sent.to,['client@example.test']);assert.deepEqual(sent.cc,['venue@example.test']);assert.equal(sent.from.address,'info@marquee.es');assert.equal(sent.replyTo,'info@marquee.es');assert.match(sent.attachments[0].content.toString(),/^%PDF-/);assert.equal(crypto.createHash('sha256').update(sent.attachments[0].content).digest('hex'),f.preview().budget.sha256);
+  assert.equal((await f.service.sendEmail(f.admin,f.eventId,request)).id,result.id);assert.equal(f.sent.length,1);await assert.rejects(()=>f.service.sendEmail(f.admin,f.eventId,{...request,subject:'Changed'}),{status:409});
+  const api=await f.client(f.admin);assert.equal((await api('/events/'+f.eventId+'/customer-communications')).data.messages[0].id,result.id);assert.ok(!JSON.stringify(f.portal.store.view(f.commercial)).includes('Mensaje de ensayo privado'));assert.ok(!JSON.stringify(f.portal.store.view(f.commercial)).includes('CUSTOMER_MESSAGE'));assert.ok(f.portal.store.view(f.admin).events.find(e=>e.id===f.eventId).history.some(h=>h.action==='CUSTOMER_MESSAGE'));
+});
+test('Changed space details, header injection, invalid recipients and missing CC stop before contacting SMTP',async t=>{
+  const f=await fixture(t);await f.mailSetup();const original=f.emailData();
+  f.portal.store.transaction(null,'TEST_VENUE_CONTACT',s=>s.venues[0].email='new-space@example.test');await assert.rejects(()=>f.service.sendEmail(f.admin,f.eventId,original),{status:409});
+  for(const change of [{cc:'third-party@example.test'},{from:'intruder@example.test'},{subject:'Subject\r\nBcc: other@example.test'},{to:'client@example.test,other@example.test'}])await assert.rejects(()=>f.service.sendEmail(f.admin,f.eventId,{...f.emailData(),...change}),{status:400});
+  f.portal.store.transaction(null,'TEST_MISSING_CC',s=>s.venues[0].email='');await assert.rejects(()=>f.service.sendEmail(f.admin,f.eventId,f.emailData()),{status:400});assert.equal(f.sent.length,0);
+});
+test('Partial SMTP acceptance and uncertain outcomes are visible and never blindly retried',async t=>{
+  const f=await fixture(t);await f.mailSetup();f.behavior.partial=true;let data=f.emailData();const partial=await f.service.sendEmail(f.admin,f.eventId,data);assert.equal(partial.status,'PARTIAL');await f.service.sendEmail(f.admin,f.eventId,data);assert.equal(f.sent.length,1);
+  f.behavior.partial=false;f.behavior.sendError=Object.assign(new Error('secret provider diagnostics'),{code:'ETIMEDOUT'});data=f.emailData();const uncertain=await f.service.sendEmail(f.admin,f.eventId,data);assert.equal(uncertain.status,'REQUIRES_REVIEW');assert.ok(!JSON.stringify(uncertain).includes('secret provider diagnostics'));await f.service.sendEmail(f.admin,f.eventId,data);assert.equal(f.sent.length,2);
+  f.behavior.sendError=null;let release;f.behavior.pending=new Promise(resolve=>release=resolve);data=f.emailData();const sending=f.service.sendEmail(f.admin,f.eventId,data),duplicate=await f.service.sendEmail(f.admin,f.eventId,data);assert.equal(duplicate.status,'REQUIRES_REVIEW');release();await sending;assert.equal(f.sent.length,3);
+});
+test('Settings verify before activation, retain encrypted credentials and restore with the message history',async t=>{
+  const f=await fixture(t);f.behavior.verifyError=Object.assign(new Error('smtp-test-secret'),{code:'EAUTH'});await assert.rejects(f.mailSetup,{status:400});assert.equal(f.service.status(f.admin).mail.configured,false);
+  f.behavior.verifyError=null;await f.mailSetup();const revision=f.service.status(f.admin).revision;await assert.rejects(()=>f.service.saveMail(f.admin,{revision:revision-1,enabled:false}),{status:409});
+  const result=await f.service.sendEmail(f.admin,f.eventId,f.emailData());const backup=f.portal.recovery.make('manual',true),dest=path.join(f.directory,'restoration');verifyRecovery(path.join(f.directory,'backups',backup.filename),dest,backup.sha256);
+  const restored=new Store(dest);try{const c=restored.read().communicationSettings;assert.equal(f.portal.security.decrypt(c.mail.secret),'smtp-test-secret');assert.equal(restored.read().customerMessages[0].id,result.id);}finally{restored.close();}
+  await f.service.saveMail(f.admin,{revision,enabled:false});assert.equal(f.service.status(f.admin).mail.configured,false);
+});
+test('WhatsApp verifies the exact business number and approved template, then sends only as admin with consent',async t=>{
+  const f=await fixture(t);f.behavior.phone='+34999999999';await assert.rejects(f.waSetup,{status:400});f.behavior.phone='+34645252250';f.behavior.templateStatus='PENDING';await assert.rejects(f.waSetup,{status:400});f.behavior.templateStatus='APPROVED';await f.waSetup();
+  assert.equal(f.service.status(f.admin).whatsapp.configured,true);assert.ok(!JSON.stringify(f.portal.store.view(f.admin)).includes('meta-test-secret'));
+  let data={digest:f.preview().digest,operationId:crypto.randomUUID(),to:'612345678',consent:false,confirm:true};await assert.rejects(()=>f.service.sendWhatsApp(f.admin,f.eventId,data),{status:400});data.consent=true;const result=await f.service.sendWhatsApp(f.admin,f.eventId,data);assert.equal(result.status,'SUBMITTED');const sent=f.meta.filter(m=>m.request.method==='POST');assert.equal(sent.length,1);assert.match(sent[0].url,/v23.0\/123\/messages$/);const payload=JSON.parse(sent[0].request.body);assert.equal(payload.to,'34612345678');assert.equal(payload.template.components[0].parameters[0].text,f.preview().eventName);await f.service.sendWhatsApp(f.admin,f.eventId,data);assert.equal(f.meta.filter(m=>m.request.method==='POST').length,1);
+  const web=f.service.prepareWhatsApp(f.admin,f.eventId,{digest:f.preview().digest,to:'612345678',body:'Hola & gracias',confirmAccount:true});assert.equal(web.url,'https://wa.me/34612345678?text=Hola%20%26%20gracias');assert.throws(()=>f.service.prepareWhatsApp(f.commercial,f.eventId,{}),{status:403});
+});
+test('Demo cannot inherit real email or WhatsApp credentials or send real messages',async t=>{
+  const f=await fixture(t);await f.mailSetup();await f.waSetup();let calls=0;const demo=createCustomerCommunications(f.portal.store,{...f.env,DEMO_MODE:'1'},f.portal.security,{transport(){calls++;throw Error('No network');},fetch(){calls++;throw Error('No network');}});
+  assert.equal(demo.status(f.admin).mail.configured,false);assert.equal(demo.status(f.admin).whatsapp.configured,false);await assert.rejects(()=>demo.sendEmail(f.admin,f.eventId,f.emailData()),{status:503});await assert.rejects(()=>demo.sendWhatsApp(f.admin,f.eventId,{}),{status:503});await assert.rejects(()=>demo.saveMail(f.admin,{}),{status:403});assert.throws(()=>demo.prepareWhatsApp(f.admin,f.eventId,{digest:demo.preview(f.admin,f.eventId).digest,to:'612345678',body:'No enviar',confirmAccount:true}),{status:403});assert.equal(calls,0);
+});
+test('Resend requires a verified sending domain and sends the same mandatory CC and exact PDF without SMTP',async t=>{
+  const f=await fixture(t),requests=[];let verified=false;
+  const mailFetch=async(url,request)=>{requests.push({url,request});assert.equal(request.headers.Authorization,'Bearer resend-test-key');if(url.includes('/domains'))return {ok:true,json:async()=>({data:[{id:'test-domain',name:'marquee.es',status:verified?'verified':'pending',capabilities:{sending:'enabled'}}]})};return {ok:true,json:async()=>({id:'resend-test-id'})};};
+  const service=createCustomerCommunications(f.portal.store,f.env,f.portal.security,{mailFetch,transport(){throw Error('SMTP must not be used for Resend');}}),setup={revision:0,provider:'RESEND',from:'info@marquee.es',name:'Marquee · B2BE',password:'resend-test-key'};
+  await assert.rejects(()=>service.saveMail(f.admin,setup),{status:400});assert.equal(service.status(f.admin).mail.configured,false);verified=true;await service.saveMail(f.admin,setup);assert.equal(service.status(f.admin).mail.provider,'RESEND');
+  const data={...service.preview(f.admin,f.eventId),subject:'Ensayo Resend',body:'Correo para cliente con copia al espacio',attachBudget:true,confirm:true,operationId:crypto.randomUUID()},result=await service.sendEmail(f.admin,f.eventId,data);assert.equal(result.status,'SUBMITTED');assert.equal(result.providerId,'resend-test-id');
+  const request=requests.find(r=>r.url.endsWith('/emails')),body=JSON.parse(request.request.body);assert.deepEqual(body.to,['client@example.test']);assert.deepEqual(body.cc,['venue@example.test']);assert.equal(body.reply_to,'info@marquee.es');assert.ok(body.from.endsWith('<info@marquee.es>'));assert.match(Buffer.from(body.attachments[0].content,'base64').toString(),/^%PDF-/);assert.ok(request.request.headers['Idempotency-Key'].endsWith(result.id));
+  await service.sendEmail(f.admin,f.eventId,data);assert.equal(requests.filter(r=>r.url.endsWith('/emails')).length,1);assert.ok(!JSON.stringify(f.portal.store.read()).includes('resend-test-key'));
+});
