@@ -42,7 +42,7 @@ function parseFile(data) {
 function createPortal(options={}) {
   const suppliedEnv=options.env||process.env;
   const demo=suppliedEnv.DEMO_MODE==='1';
-  const env=demo?{...suppliedEnv,DATABASE_URL:'',RESEND_API_KEY:'',BACKUP_S3_ENDPOINT:''}:suppliedEnv;
+  const env=demo?{...suppliedEnv,DATABASE_URL:'',RESEND_API_KEY:'',BACKUP_S3_ENDPOINT:'',BACKUP_HIDRIVE_URL:'',BACKUP_HIDRIVE_USER:'',BACKUP_HIDRIVE_PASSWORD:''}:suppliedEnv;
   // Demo backups need their own explicit credentials; never inherit a private destination.
   if(demo&&suppliedEnv.DEMO_EXTERNAL_BACKUPS==='1'){
     const keys=['BACKUP_S3_ENDPOINT','BACKUP_S3_BUCKET','BACKUP_S3_ACCESS_KEY','BACKUP_S3_SECRET_KEY','BACKUP_ENCRYPTION_KEY'];
@@ -92,7 +92,7 @@ function createPortal(options={}) {
       if(req.headers['idempotency-key']&&!/^[a-zA-Z0-9_-]{16,100}$/.test(req.headers['idempotency-key']))fail(400,'Identificador de envío no válido.');
       const clientIp=reliability.clientAddress(req,env);
       const url=new URL(req.url,origin),route=url.pathname;
-      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.5.4-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
+      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.5.5-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
       if(production&&env.CANONICAL_HOST_REDIRECT==='1'&&['GET','HEAD'].includes(req.method)&&req.headers.host!==new URL(origin).host){const destination=new URL(origin);destination.pathname=url.pathname;destination.search=url.search;res.writeHead(308,{Location:destination.href});return res.end();}
       if(route==='/brand/b2be-logo.png'&&['GET','HEAD'].includes(req.method)){res.setHeader('Cache-Control','public, max-age=0, must-revalidate');res.setHeader('ETag',masterLogoTag);return send(req.headers['if-none-match']===masterLogoTag?304:200,req.headers['if-none-match']===masterLogoTag?Buffer.alloc(0):masterLogo,'image/png');}
       if(['/','/index.html'].includes(route)&&['GET','HEAD'].includes(req.method)) {

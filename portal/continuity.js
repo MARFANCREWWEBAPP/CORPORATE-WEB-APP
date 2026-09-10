@@ -36,19 +36,25 @@ function createContinuity(store,recovery,env,fetcher=fetch) {
       {key:'https',label:'Acceso HTTPS y clave de seguridad configurada',ok:!demo&&/^https:\/\//.test(env.APP_ORIGIN||'')&&Boolean(env.PORTAL_SECRET_KEY)},
       {key:'local',label:'Copia local reciente y comprobada',ok:Boolean(recent(r.lastBackup?.createdAt)&&!r.lastError)},
       {key:'external',label:'Copia externa descargada y verificada',ok:Boolean(recent(r.externalLastVerified)&&!r.externalError)},
-      {key:'drill',label:'Recuperación externa ensayada en los últimos 30 días',ok:Boolean(!state.settings.lastRecoveryDrillError&&drill?.source==='external'&&Date.now()-Date.parse(drill.at)<30*86400000)},
+      {key:'drill',label:'Recuperación externa ensayada en los últimos 30 días',ok:Boolean(!state.settings.lastRecoveryDrillError&&['external','hidrive'].includes(drill?.source)&&Date.now()-Date.parse(drill.at)<30*86400000)},
       {key:'capacity',label:'Capacidad de almacenamiento disponible',ok:!r.capacityWarning}
     ];
-    return {mode:demo?'demo':'private',ready:!demo&&checks.every(c=>c.ok),checks:demo?checks.filter(c=>!['private','database','https'].includes(c.key)):checks,lastDrill:drill,running,externalConfigured:r.externalConfigured};
+    if(r.hidrive?.requested)checks.push({key:'hidrive',label:'Copia adicional en IONOS HiDrive descargada y verificada',ok:Boolean(r.hidrive.configured&&!r.hidrive.error&&recent(r.hidrive.lastVerified))});
+    return {mode:demo?'demo':'private',ready:!demo&&checks.every(c=>c.ok),checks:demo?checks.filter(c=>!['private','database','https'].includes(c.key)):checks,lastDrill:drill,running,externalConfigured:r.externalConfigured,hidriveConfigured:Boolean(r.hidrive?.configured)};
   }
   async function drill(user,data){
     admin(user);if(running)fail(409,'Ya hay una comprobación de recuperación en curso.');
-    if(!['local','external'].includes(data.source))fail(400,'Selecciona copia local o externa.');
+    if(!['local','external','hidrive'].includes(data.source))fail(400,'Selecciona copia local, externa o HiDrive.');
     if(data.source==='external'&&((env.DEMO_MODE==='1'&&env.DEMO_EXTERNAL_BACKUPS!=='1')||!recovery.status().externalConfigured))fail(409,'Las copias externas todavía no están configuradas para este entorno.');
+    if(data.source==='hidrive'&&(env.DEMO_MODE==='1'||!recovery.status().hidrive?.configured))fail(409,'HiDrive todavía no está configurado para este entorno.');
     running=true;let temporary;
     try {
       let backup,bytes;
-      if(data.source==='external'){
+      if(data.source==='hidrive'){
+        backup=store.backups().find(b=>recovery.hidrive.verified(b));
+        if(!backup)fail(409,'Todavía no hay una copia verificada en HiDrive.');
+        bytes=await recovery.hidrive.download(backup);
+      }else if(data.source==='external'){
         backup=store.backups().find(b=>b.external?.verifiedAt);
         if(!backup)fail(409,'Todavía no hay una copia externa verificada.');
         const encrypted=await getObject(env,backup.external.key,fetcher);
