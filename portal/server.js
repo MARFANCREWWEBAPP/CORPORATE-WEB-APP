@@ -93,7 +93,7 @@ function createPortal(options={}) {
       if(req.headers['idempotency-key']&&!/^[a-zA-Z0-9_-]{16,100}$/.test(req.headers['idempotency-key']))fail(400,'Identificador de envío no válido.');
       const clientIp=reliability.clientAddress(req,env);
       const url=new URL(req.url,origin),route=url.pathname;
-      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.5.6-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
+      if(route==='/health'&&['GET','HEAD'].includes(req.method)) {store.read();return send(200,{status:'ok',version:'4.5.7-portal',mode:demo?'demo':'portal',storage:store.db.kind==='postgres'?'postgresql':demo&&!env.RAILWAY_VOLUME_MOUNT_PATH?'demo-instance':'persistent',backupStatus:lastBackupError?'error':'ok'});}
       if(production&&env.CANONICAL_HOST_REDIRECT==='1'&&['GET','HEAD'].includes(req.method)&&req.headers.host!==new URL(origin).host){const destination=new URL(origin);destination.pathname=url.pathname;destination.search=url.search;res.writeHead(308,{Location:destination.href});return res.end();}
       if(route==='/brand/b2be-logo.png'&&['GET','HEAD'].includes(req.method)){res.setHeader('Cache-Control','public, max-age=0, must-revalidate');res.setHeader('ETag',masterLogoTag);return send(req.headers['if-none-match']===masterLogoTag?304:200,req.headers['if-none-match']===masterLogoTag?Buffer.alloc(0):masterLogo,'image/png');}
       if(['/','/index.html'].includes(route)&&['GET','HEAD'].includes(req.method)) {
@@ -228,7 +228,7 @@ function createPortal(options={}) {
       }
       if(route==='/api/documents/replicas/review'&&req.method==='GET')return send(200,objectStorage.review(user));
       if(route==='/api/documents/replicas/copy'&&req.method==='POST'){const result=await objectStorage.copyReviewed(user,await readJson(req));return send(200,{result,data:store.view(user)});}
-      if(route==='/api/integrations'&&req.method==='GET'){const state=integrations.status();if(user.role!=='ADMIN')delete state.services.whatsapp;else state.services.whatsapp=customerCommunications.status(user).whatsapp.configured?'configured':demo?'demo':'pending';return send(200,state);}
+      if(route==='/api/integrations'&&req.method==='GET'){const state=integrations.status();if(user.role!=='ADMIN')delete state.services.whatsapp;else state.services.whatsapp=demo?'demo':'external';return send(200,state);}
       const integrationMatch=route.match(/^\/api\/events\/([^/]+)\/integrations\/(odoo|whatsapp|assistant)$/);
       if(integrationMatch&&req.method==='POST'){if(integrationMatch[2]==='whatsapp'){admin(user);fail(410,'Abre Correo y WhatsApp desde administración para revisar los destinatarios.');}rateLimit('integration:'+user.id,20);const result=await integrations.run(user,integrationMatch[1],integrationMatch[2],await readJson(req),req.headers['idempotency-key']);return send(200,{result,data:store.view(user)});}
       const generatedMatch=route.match(/^\/api\/events\/([^/]+)\/generate-budget$/);
