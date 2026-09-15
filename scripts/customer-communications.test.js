@@ -8,9 +8,9 @@ const {verifyRecovery}=require('../portal/reliability');
 async function fixture(t){
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'marquee-customer-mail-')),data=await privateFixture(directory),password=data.password;data.store.close();
   const sent=[],meta=[],env={APP_ORIGIN:'http://portal.test',DATA_DIR:directory,PORTAL_SECRET_KEY:crypto.randomBytes(32).toString('base64')};
-  const behavior={verifyError:null,sendError:null,partial:false,phone:'+34 645 252 250',templateStatus:'APPROVED',pending:null};
+  const behavior={verifyError:null,sendError:null,partial:false,pending:null};
   const smtpTransport=opts=>{assert.equal(opts.host,'smtp.ionos.es');assert.equal(opts.port,465);assert.equal(opts.secure,true);assert.equal(opts.tls.rejectUnauthorized,true);assert.equal(opts.disableUrlAccess,true);return {async verify(){if(behavior.verifyError)throw behavior.verifyError;assert.equal(opts.auth.user,'info@marquee.es');assert.equal(opts.auth.pass,'smtp-test-secret');return true;},async sendMail(message){sent.push(message);if(behavior.pending)await behavior.pending;if(behavior.sendError)throw behavior.sendError;return {accepted:behavior.partial?[message.to[0]]:message.envelope.to,rejected:behavior.partial?[message.cc[0]]:[],messageId:message.messageId};},close(){}};};
-  const integrationFetch=async(url,request)=>{meta.push({url,request});if(request.method==='POST')return {ok:true,json:async()=>({messages:[{id:'wamid.test'}]})};return {ok:true,json:async()=>url.includes('/phone_numbers')?{data:[{id:'123',display_phone_number:behavior.phone}]}:{data:[{name:'marquee_update',language:'es',status:behavior.templateStatus,components:[{type:'BODY',text:'Evento {{1}}. Próxima acción: {{2}}.'}]}]}};};
+  const integrationFetch=async(url,request)=>{meta.push({url,request});throw Error('WhatsApp must never call Meta');};
   const portal=createPortal({env,noAutomaticBackup:true,noAutomaticMail:true,smtpTransport,integrationFetch});
   portal.store.transaction(null,'TEST_CONTACTS',s=>{s.venues[0].email='venue@example.test';Object.assign(s.events[0],{email:'client@example.test',phone:'612345678'});s.users.forEach(u=>u.mustChangePassword=false);});
   const users=portal.store.read().users,admin=users.find(u=>u.role==='ADMIN'),commercial=users.find(u=>u.role==='COMMERCIAL'),venue=users.find(u=>u.role==='VENUE_USER');
@@ -20,8 +20,7 @@ async function fixture(t){
   const service=portal.customerCommunications,preview=()=>service.preview(admin,data.eventId);
   const emailData=()=>({...preview(),operationId:crypto.randomUUID(),subject:'Propuesta de ensayo',body:'Mensaje de ensayo privado',confirm:true,attachBudget:true});
   const mailSetup=()=>service.saveMail(admin,{revision:service.status(admin).revision,from:'info@marquee.es',name:'Marquee',password:'smtp-test-secret',enabled:true});
-  const waSetup=()=>service.saveWhatsApp(admin,{revision:service.status(admin).revision,businessId:'456',phoneId:'123',token:'meta-test-secret',template:'marquee_update',language:'es',apiVersion:'v23.0',enabled:true});
-  return {portal,env,directory,admin,commercial,venue,client,sent,meta,behavior,service,preview,emailData,mailSetup,waSetup,eventId:data.eventId};
+  return {portal,env,directory,admin,commercial,venue,client,sent,meta,behavior,service,preview,emailData,mailSetup,eventId:data.eventId};
 }
 test('Only administrators can configure, inspect or use client email and WhatsApp, including legacy routes',async t=>{
   const f=await fixture(t);await f.mailSetup();const admin=await f.client(f.admin);
@@ -54,15 +53,23 @@ test('Settings verify before activation, retain encrypted credentials and restor
   const restored=new Store(dest);try{const c=restored.read().communicationSettings;assert.equal(f.portal.security.decrypt(c.mail.secret),'smtp-test-secret');assert.equal(restored.read().customerMessages[0].id,result.id);}finally{restored.close();}
   await f.service.saveMail(f.admin,{revision,enabled:false});assert.equal(f.service.status(f.admin).mail.configured,false);
 });
-test('WhatsApp verifies the exact business number and approved template, then sends only as admin with consent',async t=>{
-  const f=await fixture(t);f.behavior.phone='+34999999999';await assert.rejects(f.waSetup,{status:400});f.behavior.phone='+34645252250';f.behavior.templateStatus='PENDING';await assert.rejects(f.waSetup,{status:400});f.behavior.templateStatus='APPROVED';await f.waSetup();
-  assert.equal(f.service.status(f.admin).whatsapp.configured,true);assert.ok(!JSON.stringify(f.portal.store.view(f.admin)).includes('meta-test-secret'));
-  let data={digest:f.preview().digest,operationId:crypto.randomUUID(),to:'612345678',consent:false,confirm:true};await assert.rejects(()=>f.service.sendWhatsApp(f.admin,f.eventId,data),{status:400});data.consent=true;const result=await f.service.sendWhatsApp(f.admin,f.eventId,data);assert.equal(result.status,'SUBMITTED');const sent=f.meta.filter(m=>m.request.method==='POST');assert.equal(sent.length,1);assert.match(sent[0].url,/v23.0\/123\/messages$/);const payload=JSON.parse(sent[0].request.body);assert.equal(payload.to,'34612345678');assert.equal(payload.template.components[0].parameters[0].text,f.preview().eventName);await f.service.sendWhatsApp(f.admin,f.eventId,data);assert.equal(f.meta.filter(m=>m.request.method==='POST').length,1);
-  const web=f.service.prepareWhatsApp(f.admin,f.eventId,{digest:f.preview().digest,to:'612345678',body:'Hola & gracias',confirmAccount:true});assert.equal(web.url,'https://wa.me/34612345678?text=Hola%20%26%20gracias');assert.throws(()=>f.service.prepareWhatsApp(f.commercial,f.eventId,{}),{status:403});
+test('WhatsApp opens the event contact in the desktop app without Meta, sending or altering history',async t=>{
+  const f=await fixture(t),call=await f.client(f.admin),before=JSON.stringify(f.portal.store.read());
+  assert.equal(f.service.status(f.admin).whatsapp.mode,'external');
+  for(const [route,method]of [['/admin/communications/whatsapp','PATCH'],['/events/'+f.eventId+'/customer-communications/whatsapp','POST'],['/events/'+f.eventId+'/integrations/whatsapp','POST']])assert.equal((await call(route,method,{})).status,410);
+  assert.equal((await call('/integrations')).data.services.whatsapp,'external');
+  const body='Hola María 👋 & gracias\nPropuesta: 50% + montaje?',request={digest:f.preview().digest,body};
+  const response=await call('/events/'+f.eventId+'/customer-communications/whatsapp-open','POST',request);assert.equal(response.status,200);
+  const app=new URL(response.data.result.appUrl),web=new URL(response.data.result.url);assert.equal(app.protocol,'whatsapp:');assert.equal(app.hostname,'send');assert.equal(app.searchParams.get('phone'),'34612345678');assert.equal(app.searchParams.get('text'),body);assert.equal(web.hostname,'wa.me');assert.equal(web.pathname,'/34612345678');assert.equal(web.searchParams.get('text'),body);
+  assert.throws(()=>f.service.prepareWhatsApp(f.admin,f.eventId,{...request,to:'699999999'}),{status:400});
+  assert.throws(()=>f.service.prepareWhatsApp(f.admin,f.eventId,{...request,body:''}),{status:400});
+  f.portal.store.transaction(null,'TEST_CONTACT_CHANGED',s=>s.events[0].phone='+44 7700 900123');assert.throws(()=>f.service.prepareWhatsApp(f.admin,f.eventId,request),{status:409});assert.equal(f.preview().whatsappPhone,'447700900123');
+  f.portal.store.transaction(null,'TEST_CONTACT_MISSING',s=>s.events[0].phone='');assert.equal(f.preview().whatsappPhone,'');assert.ok(f.preview().whatsappError);assert.throws(()=>f.service.prepareWhatsApp(f.admin,f.eventId,{digest:f.preview().digest,body}),{status:400});
+  assert.equal(f.meta.length,0);assert.equal(f.sent.length,0);assert.deepEqual(f.portal.store.read().customerMessages,JSON.parse(before).customerMessages);assert.deepEqual(f.portal.store.read().communicationSettings,JSON.parse(before).communicationSettings);
 });
 test('Demo cannot inherit real email or WhatsApp credentials or send real messages',async t=>{
-  const f=await fixture(t);await f.mailSetup();await f.waSetup();let calls=0;const demo=createCustomerCommunications(f.portal.store,{...f.env,DEMO_MODE:'1'},f.portal.security,{transport(){calls++;throw Error('No network');},fetch(){calls++;throw Error('No network');}});
-  assert.equal(demo.status(f.admin).mail.configured,false);assert.equal(demo.status(f.admin).whatsapp.configured,false);await assert.rejects(()=>demo.sendEmail(f.admin,f.eventId,f.emailData()),{status:503});await assert.rejects(()=>demo.sendWhatsApp(f.admin,f.eventId,{}),{status:503});await assert.rejects(()=>demo.saveMail(f.admin,{}),{status:403});assert.throws(()=>demo.prepareWhatsApp(f.admin,f.eventId,{digest:demo.preview(f.admin,f.eventId).digest,to:'612345678',body:'No enviar',confirmAccount:true}),{status:403});assert.equal(calls,0);
+  const f=await fixture(t);await f.mailSetup();f.portal.store.transaction(null,'TEST_LEGACY_WHATSAPP',s=>{s.communicationSettings.whatsapp={enabled:true,secret:'legacy-unused-secret',verifiedAt:new Date().toISOString()};});let calls=0;const demo=createCustomerCommunications(f.portal.store,{...f.env,DEMO_MODE:'1'},f.portal.security,{transport(){calls++;throw Error('No network');},fetch(){calls++;throw Error('No network');}});
+  assert.equal(demo.status(f.admin).mail.configured,false);assert.equal(demo.status(f.admin).whatsapp.configured,false);await assert.rejects(()=>demo.sendEmail(f.admin,f.eventId,f.emailData()),{status:503});await assert.rejects(()=>demo.sendWhatsApp(f.admin,f.eventId,{}),{status:410});await assert.rejects(()=>demo.saveMail(f.admin,{}),{status:403});assert.throws(()=>demo.prepareWhatsApp(f.admin,f.eventId,{digest:demo.preview(f.admin,f.eventId).digest,to:'612345678',body:'No enviar',confirmAccount:true}),{status:403});assert.equal(calls,0);
 });
 test('Resend requires a verified sending domain and sends the same mandatory CC and exact PDF without SMTP',async t=>{
   const f=await fixture(t),requests=[];let verified=false;

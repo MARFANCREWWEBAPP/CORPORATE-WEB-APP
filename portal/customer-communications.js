@@ -11,7 +11,7 @@ function createCustomerCommunications(store,env,security,options={}){
   const mailFetch=options.mailFetch||fetcher;
   function configuration(){return store.read().communicationSettings||{revision:0};}
   function smtp(c){return transport({host:'smtp.ionos.es',port:465,secure:true,auth:{user:c.from,pass:security.decrypt(c.secret)},tls:{minVersion:'TLSv1.2',rejectUnauthorized:true},connectionTimeout:10000,greetingTimeout:10000,socketTimeout:20000,disableFileAccess:true,disableUrlAccess:true,logger:false,debug:false});}
-  function status(user){admin(user);const c=configuration(),mail=c.mail||{},wa=c.whatsapp||{};return {demo,revision:c.revision||0,mail:{provider:mail.provider||'RESEND',from:mail.from||DEFAULT_FROM,name:mail.name||'Marquee · B2BE',configured:!demo&&Boolean(mail.enabled&&mail.secret&&mail.verifiedAt),hasPassword:Boolean(mail.secret),verifiedAt:mail.verifiedAt||null},whatsapp:{number:'+'+WHATSAPP_NUMBER,configured:!demo&&Boolean(wa.enabled&&wa.secret&&wa.verifiedAt),hasToken:Boolean(wa.secret),phoneId:wa.phoneId||'',businessId:wa.businessId||'',template:wa.template||'',language:wa.language||'es',apiVersion:wa.apiVersion||'v23.0',templateBody:wa.templateBody||'',verifiedAt:wa.verifiedAt||null}};}
+  function status(user){admin(user);const c=configuration(),mail=c.mail||{};return {demo,revision:c.revision||0,mail:{provider:mail.provider||'RESEND',from:mail.from||DEFAULT_FROM,name:mail.name||'Marquee · B2BE',configured:!demo&&Boolean(mail.enabled&&mail.secret&&mail.verifiedAt),hasPassword:Boolean(mail.secret),verifiedAt:mail.verifiedAt||null},whatsapp:{number:'+'+WHATSAPP_NUMBER,mode:'external',available:!demo,configured:false}};}
   function commitSettings(user,data,key,value){return store.transaction(user,'CUSTOMER_CHANNEL_CONFIGURED',s=>{const c=s.communicationSettings||{revision:0};if(data.revision!==c.revision)fail(409,'La configuración ha cambiado. Actualiza antes de guardarla.');c[key]=value;c.revision++;s.communicationSettings=c;});}
   async function saveMail(user,data){
     admin(user);if(demo)fail(403,'El correo real se configura en el portal privado.');
@@ -30,27 +30,13 @@ function createCustomerCommunications(store,env,security,options={}){
     try{connection=smtp(candidate);await connection.verify();}catch(error){fail(400,error.code==='EAUTH'?'IONOS no ha aceptado el usuario o la contraseña del correo.':'No se pudo conectar con el correo de IONOS. Revisa la conexión del servidor; el envío SMTP en Railway requiere un plan compatible.');}finally{connection?.close();}
     commitSettings(user,data,'mail',{...candidate,verifiedAt:now()});return status(user);
   }
-  async function meta(c,path){const response=await fetcher('https://graph.facebook.com/'+c.apiVersion+'/'+path,{headers:{Authorization:'Bearer '+security.decrypt(c.secret)},signal:AbortSignal.timeout(15000),redirect:'error'});if(!response.ok)fail(400,'Meta no ha podido verificar la cuenta. Revisa sus datos y permisos.');return response.json();}
-  async function saveWhatsApp(user,data){
-    admin(user);if(demo)fail(403,'WhatsApp real se conecta en el portal privado.');
-    const old=configuration().whatsapp||{};
-    if(data.enabled===false){commitSettings(user,data,'whatsapp',{...old,enabled:false});return status(user);}
-    const c={phoneId:text(data.phoneId,30,true),businessId:text(data.businessId,30,true),template:text(data.template,512,true),language:text(data.language||'es',10,true),apiVersion:text(data.apiVersion||'v23.0',12,true),enabled:true};
-    if(!/^\d+$/.test(c.phoneId)||!/^\d+$/.test(c.businessId)||!/^v\d+\.0$/.test(c.apiVersion)||!/^\w+$/.test(c.template)||!/^\w+$/.test(c.language))fail(400,'Revisa los datos de conexión de WhatsApp Business.');
-    if(data.token!==undefined&&(typeof data.token!=='string'||data.token.length>8192))fail(400,'Revisa la clave de conexión de Meta.');
-    c.secret=data.token?security.encrypt(data.token):old.secret;if(!c.secret)fail(400,'Falta la clave de conexión de Meta.');
-    let number,templates;try{number=await meta(c,c.businessId+'/phone_numbers?fields=id,display_phone_number&limit=100');templates=await meta(c,c.businessId+'/message_templates?name='+encodeURIComponent(c.template)+'&limit=100');}catch(error){if(error.status)throw error;fail(400,'No se pudo comprobar WhatsApp Business con Meta.');}
-    const matching=number.data?.find(n=>n.id===c.phoneId);if(!matching||phone(matching.display_phone_number)!==WHATSAPP_NUMBER)fail(400,'La cuenta de Meta debe corresponder al número +34 645 252 250.');
-    const template=templates.data?.find(t=>t.name===c.template&&t.language===c.language&&t.status==='APPROVED'),body=template?.components?.find(part=>part.type==='BODY')?.text||'';
-    if(!template||[...body.matchAll(/\{\{(.*?)\}\}/g)].map(m=>m[1]).join(',')!=='1,2'||template.components.some(p=>!['BODY','FOOTER','HEADER'].includes(p.type)||(p.type==='HEADER'&&(p.format!=='TEXT'||/\{\{/.test(p.text||'')))))fail(400,'Elige una plantilla aprobada con dos variables de texto: 1, nombre del evento; 2, próxima acción. No admite botones ni cabeceras variables.');
-    const display=['HEADER','BODY','FOOTER'].map(type=>template.components.find(p=>p.type===type)?.text).filter(Boolean).join('\n\n');
-    commitSettings(user,data,'whatsapp',{...c,templateBody:display,verifiedAt:now()});return status(user);
-  }
+  async function saveWhatsApp(user){admin(user);fail(410,'WhatsApp se abre en tu aplicación. No necesita conexión con Meta.');}
   function preview(user,eventId){
     admin(user);const state=store.read(),event=state.events.find(e=>e.id===eventId&&!e.deletedAt);if(!event)fail(404,'Evento no encontrado.');
     const venue=state.venues.find(v=>v.id===event.venueId);if(!venue)fail(400,'El evento necesita un espacio de eventos.');
     const config=status(user),budget=event.budgets.find(b=>b.isCurrent&&['SENT','FINAL'].includes(b.status));
-    const result={eventId,eventName:event.eventName,venueName:venue.name,from:config.mail.from,to:event.email||'',cc:venue.email||'',phone:event.phone||'',subject:'Marquee · '+event.eventName,body:'Hola'+(event.contactFirstName?' '+event.contactFirstName:'')+',\n\nTe escribimos sobre '+event.eventName+'.\n\n'+(event.nextAction||'')+'\n\nUn saludo,\nMarquee Audiovisuales',budget:budget?{id:budget.id,name:budget.displayName||budget.originalName,sha256:budget.sha256,sizeBytes:budget.sizeBytes}:null,whatsappText:(config.whatsapp.templateBody||'Evento: {{1}}\nPróxima acción: {{2}}').replace('{{1}}',event.eventName).replace('{{2}}',event.nextAction||'Pendiente de concretar'),configured:{mail:config.mail.configured,whatsapp:config.whatsapp.configured},whatsappNumber:config.whatsapp.number};
+    let whatsappPhone='',whatsappError='';try{whatsappPhone=phone(event.phone);}catch{whatsappError='Completa un teléfono válido con prefijo internacional en la ficha del evento.';}
+    const result={eventId,contactName:[event.contactFirstName,event.contactLastName].filter(Boolean).join(' '),whatsappPhone,whatsappError,eventName:event.eventName,venueName:venue.name,from:config.mail.from,to:event.email||'',cc:venue.email||'',phone:event.phone||'',subject:'Marquee · '+event.eventName,body:'Hola'+(event.contactFirstName?' '+event.contactFirstName:'')+',\n\nTe escribimos sobre '+event.eventName+'.\n\n'+(event.nextAction||'')+'\n\nUn saludo,\nMarquee Audiovisuales',budget:budget?{id:budget.id,name:budget.displayName||budget.originalName,sha256:budget.sha256,sizeBytes:budget.sizeBytes}:null,configured:{mail:config.mail.configured,whatsapp:config.whatsapp.configured},whatsappNumber:config.whatsapp.number};
     result.digest=sha(JSON.stringify({eventId,revision:event.revision,venueId:venue.id,venueEmail:venue.email,configRevision:config.revision,result}));return result;
   }
   function list(user,eventId){admin(user);if(eventId)preview(user,eventId);return (store.read().customerMessages||[]).filter(m=>!eventId||m.eventId===eventId).slice().reverse().map(({key,digest,...m})=>m);}
@@ -92,17 +78,12 @@ function createCustomerCommunications(store,env,security,options={}){
       return completed(user,message,{status:complete?'SUBMITTED':accepted.length?'PARTIAL':'REQUIRES_REVIEW',providerId:sent.messageId||null,accepted,rejected,notice:complete?'IONOS ha aceptado el correo para el cliente y el espacio. La entrega final aún no está confirmada.':'IONOS no ha confirmado todos los destinatarios. Revisa el resultado antes de repetir para evitar duplicados.'});
     }catch(error){return completed(user,message,{status:['EAUTH','EENVELOPE','EMESSAGE'].includes(error.code)?'FAILED':'REQUIRES_REVIEW',notice:'No se ha podido confirmar el envío completo. Comprueba el buzón y los destinatarios antes de preparar otro envío.'});}finally{connection?.close();}
   }
-  async function sendWhatsApp(user,eventId,data){
-    admin(user);const existing=(store.read().customerMessages||[]).find(m=>m.key===data.operationId&&m.actorId===user.id);
-    if(existing){if(existing.digest!==sha(JSON.stringify({eventId,channel:'WHATSAPP',data})))fail(409,'El identificador ya corresponde a otro mensaje.');return replay(existing);}
-    const p=preview(user,eventId);if(demo||!p.configured.whatsapp)fail(503,'Conecta primero el número de WhatsApp Business desde administración.');if(data.digest!==p.digest)fail(409,'El expediente o la configuración han cambiado. Revisa de nuevo el mensaje.');if(data.consent!==true)fail(400,'Confirma que el cliente ha aceptado recibir mensajes por WhatsApp.');
-    const to=phone(data.to),c=configuration().whatsapp,event=store.read().events.find(e=>e.id===eventId);
-    const {message,previous}=begin(user,eventId,'WHATSAPP',data,{from:'+'+WHATSAPP_NUMBER,to,body:p.whatsappText,consent:true});if(previous)return replay(previous);
-    try{const response=await fetcher('https://graph.facebook.com/'+c.apiVersion+'/'+c.phoneId+'/messages',{method:'POST',headers:{Authorization:'Bearer '+security.decrypt(c.secret),'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to,type:'template',template:{name:c.template,language:{code:c.language},components:[{type:'body',parameters:[{type:'text',text:event.eventName},{type:'text',text:event.nextAction||'Pendiente de concretar'}]}]}}),signal:AbortSignal.timeout(20000),redirect:'error'});
-      if(!response.ok)return completed(user,message,{status:response.status<500?'FAILED':'REQUIRES_REVIEW',notice:'Meta no ha confirmado el envío. Comprueba el estado antes de repetir.'});const result=await response.json();if(!result.messages?.[0]?.id)throw new Error('Unconfirmed');return completed(user,message,{status:'SUBMITTED',providerId:result.messages[0].id,notice:'WhatsApp ha aceptado el mensaje. La entrega y lectura aún no están confirmadas.'});
-    }catch{return completed(user,message,{status:'REQUIRES_REVIEW',notice:'No se ha podido confirmar el resultado. Comprueba WhatsApp antes de repetir el envío.'});}
+  async function sendWhatsApp(user){admin(user);fail(410,'El envío se confirma en WhatsApp. Abre el contacto desde el evento.');}
+  function prepareWhatsApp(user,eventId,data){
+    admin(user);const p=preview(user,eventId);if(data.digest!==p.digest)fail(409,'Los datos del evento han cambiado. Revisa el mensaje.');if(demo)fail(403,'La demo no abre conversaciones reales.');
+    const to=phone(p.phone);if(data.to!==undefined&&phone(data.to)!==to)fail(400,'Usa el teléfono de la persona de contacto guardado en el evento.');const body=text(data.body,4000,true),encoded=encodeURIComponent(body);
+    return {to,appUrl:'whatsapp://send?phone='+to+'&text='+encoded,url:'https://wa.me/'+to+'?text='+encoded,notice:'Confirma el envío en tu aplicación de WhatsApp. B2BE no registra el borrador como enviado.'};
   }
-  function prepareWhatsApp(user,eventId,data){admin(user);const p=preview(user,eventId);if(data.digest!==p.digest)fail(409,'Los datos del evento han cambiado. Revisa el mensaje.');if(demo)fail(403,'La demo no abre conversaciones reales.');const to=phone(data.to),body=text(data.body,4000,true);if(data.confirmAccount!==true)fail(400,'Confirma que usarás WhatsApp con el número +34 645 252 250.');return {url:'https://wa.me/'+to+'?text='+encodeURIComponent(body),notice:'El mensaje se termina de enviar en WhatsApp. B2BE no puede confirmar su envío desde allí.'};}
   return {status,saveMail,saveWhatsApp,preview,list,sendEmail,sendWhatsApp,prepareWhatsApp};
 }
 module.exports={createCustomerCommunications,address,phone};
