@@ -157,3 +157,9 @@ img.b2be-logo{background:#fff;border-radius:6px;object-fit:contain;padding:4px;f
 .audit-event-details dt{font-size:13px;font-weight:600;line-height:1.5;color:#596579;margin-bottom:5px}
 .audit-event-details dd{margin:0;font-size:16px;font-weight:600;line-height:1.5;color:#17243b;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
 @media(max-width:600px){.audit-event-details{grid-template-columns:minmax(0,1fr)}.audit-event-details>div{padding:12px 16px}}
+
+.v4-work-row.audit-budget-waiting:before{background:#26845a}
+.v4-work-row.audit-budget-waiting.overdue:before{background:#c08420}
+.audit-budget-waiting .v4-work-top{flex-wrap:wrap}
+.audit-budget-waiting .v4-work-top em.overdue{color:#946015}
+.audit-budget-sent{font-size:13px;font-weight:700;color:#206546;background:#eaf7ef;border-radius:6px;padding:4px 7px}
