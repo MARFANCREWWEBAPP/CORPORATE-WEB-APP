@@ -147,3 +147,13 @@ img.b2be-logo{background:#fff;border-radius:6px;object-fit:contain;padding:4px;f
   .audit-chat-mode .conversation-head-actions .btn{width:100%;min-width:0;font-size:13px;padding:8px;overflow-wrap:anywhere}
   .audit-chat-mode .conversation-head-actions .btn .icon{display:none}
 }
+
+/* The event drawer lives outside the main shell: keep its read-only details legible too. */
+.v4-drawer .section-title{font-size:18px;line-height:1.4}
+.v4-drawer .card-desc{font-size:14px;line-height:1.5}
+.v4-drawer .btn{font-size:14px;min-height:42px}
+.audit-event-details{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;margin:0;background:#fff}
+.audit-event-details>div{min-width:0;padding:16px 20px;border-top:1px solid var(--line,#e5e7eb)}
+.audit-event-details dt{font-size:13px;font-weight:600;line-height:1.5;color:#596579;margin-bottom:5px}
+.audit-event-details dd{margin:0;font-size:16px;font-weight:600;line-height:1.5;color:#17243b;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
+@media(max-width:600px){.audit-event-details{grid-template-columns:minmax(0,1fr)}.audit-event-details>div{padding:12px 16px}}

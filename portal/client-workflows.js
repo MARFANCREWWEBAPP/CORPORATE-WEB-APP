@@ -261,3 +261,16 @@
   },true);
   function auditRestoreConflict(){const conflict=auditState.conflict;if(!conflict)return;app.modal=conflict.previousModal;renderShell();const form=document.querySelector('#modal-root form');if(form)for(const [key,value]of Object.entries(conflict.data)){const field=form.elements.namedItem(key);if(field&&typeof value!=='object')field.value=value??'';}portalDirty=true;}
   function auditReset(){auditState.resetting=true;clearTimeout(auditState.draftTimer);auditChatDrafts.reset();auditState.chatSends.clear();auditState.pending.clear();auditState.conflict=null;auditState.draft=null;auditState.draftDirty=false;auditState.draftAttempt=null;auditState.ownerId=null;auditState.mfa=null;auditState.import=null;auditState.services=null;auditState.loginView='login';auditState.chatQuery='';auditState.mobileThread=false;auditState.resetting=false;}
+
+  function auditEventDetails(event) {
+    const venue=venueById(event.venueId);
+    const fields=[
+      ['Cliente',event.finalClient],['Agencia',event.agency],
+      ['Persona de contacto',[event.contactFirstName,event.contactLastName].filter(Boolean).join(' ')],
+      ['Asistentes',event.numberOfPeople ? `${event.numberOfPeople} personas` : ''],
+      ['Teléfono',event.phone],['Correo electrónico',event.email],
+      ['Espacio de eventos',[venue?.name,venue?.municipality].filter(Boolean).join(' · ')],['Sala',event.room],
+      ['Fecha',event.eventDate ? formatDateLong(event.eventDate) : ''],['Horario',eventTime(event)]
+    ];
+    return `<dl class="audit-event-details">${fields.map(([label,value])=>`<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || 'Sin indicar')}</dd></div>`).join('')}</dl>`;
+  }
