@@ -13,6 +13,7 @@ function buildPortal() {
   replace(/  function saveSession\(userId\) \{[\s\S]*?\n  \}/g,'  function saveSession() {}',1);
   replace(/  loadBackupCache\(false\);/g,'',1);
   html=html.replaceAll('localStorage','portalMemoryStorage');
+  replace(/<div class="v4-detail-grid">[\s\S]*?<\/div><\/section>/g,'${auditEventDetails(event)}</section>',1);
   const memory='const portalMemoryValues = new Map(); const portalMemoryStorage = {getItem: key => portalMemoryValues.get(key) || null, setItem: (key,value) => portalMemoryValues.set(key,value), removeItem: key => portalMemoryValues.delete(key)};\n';
   html=html.replace(/const LOGO_DARK = [^;]+;/,"const LOGO_DARK = '/brand/b2be-logo.png';").replace(/const LOGO_WHITE = [^;]+;/,"const LOGO_WHITE = '/brand/b2be-logo.png';");
   // Place the storage facade in the same lexical scope as the original application.
