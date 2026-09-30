@@ -219,11 +219,40 @@
     const field=event.target;
     if(field.id==='audit-chat-search'){auditState.chatQuery=field.value;auditFilterChat();return;}
     if(field.closest?.('#new-event-form'))saveV4Draft();
-    if(field.closest?.('#comment-form')&&field.name==='body')auditChatDrafts.edit(field.form.elements.eventId.value,field.value);
+    if(field.closest?.('#comment-form')&&field.name==='body'){auditResizeComposer(field);auditChatDrafts.edit(field.form.elements.eventId.value,field.value);}
   },true);
   window.addEventListener('online',()=>{auditState.connected=true;if(portalAccount){if(auditState.draftDirty)auditSaveDraft().catch(()=>{});auditChatDrafts.flushAll().catch(()=>{});}auditUpdateConnection();});
   window.addEventListener('offline',()=>{auditState.connected=false;auditUpdateConnection();});
-  function auditChatViewport(){const viewport=window.visualViewport;document.documentElement.style.setProperty('--audit-visible-height',Math.round(viewport?.height||innerHeight)+'px');document.documentElement.style.setProperty('--audit-visible-top',Math.round(viewport?.offsetTop||0)+'px');document.body.classList.toggle('audit-chat-keyboard',Boolean(viewport&&viewport.height<innerHeight*.8));const shell=document.querySelector('.communication-shell');if(shell&&innerWidth>840&&innerHeight>600)shell.style.setProperty('--audit-chat-height',Math.max(340,innerHeight-Math.max(70,shell.getBoundingClientRect().top)-16)+'px');}
+  function auditResizeComposer(field){
+    if(!field||!field.getClientRects().length)return;
+    const thread=field.closest('.conversation-detail')?.querySelector('.message-thread');
+    const atBottom=thread&&thread.scrollHeight-thread.clientHeight-thread.scrollTop<36;
+    // Reset before measuring so deleting text and widening the window also shrink the field.
+    field.style.height='auto';
+    const styles=getComputedStyle(field);
+    const border=(parseFloat(styles.borderTopWidth)||0)+(parseFloat(styles.borderBottomWidth)||0);
+    const minimum=parseFloat(styles.minHeight)||58;
+    const maximum=parseFloat(styles.maxHeight)||180;
+    const height=Math.min(maximum,Math.max(minimum,field.scrollHeight+border));
+    field.style.height=height+'px';
+    field.style.overflowY=field.scrollHeight+border>height?'auto':'hidden';
+    if(atBottom)thread.scrollTop=thread.scrollHeight;
+  }
+  function auditChatViewport(){
+    const viewport=window.visualViewport;
+    const height=viewport?.height||innerHeight;
+    const top=viewport?.offsetTop||0;
+    document.documentElement.style.setProperty('--audit-visible-height',Math.round(height)+'px');
+    document.documentElement.style.setProperty('--audit-visible-top',Math.round(top)+'px');
+    document.body.classList.toggle('audit-chat-keyboard',Boolean(viewport&&height<innerHeight*.8));
+    const shell=document.querySelector('.communication-shell');
+    if(shell&&innerWidth>840){
+      // Use the available space at every laptop height, including 600px and below.
+      const available=Math.max(0,Math.floor(top+height-shell.getBoundingClientRect().top-12));
+      shell.style.setProperty('--audit-chat-height',available+'px');
+    }
+    document.querySelectorAll('#comment-form textarea[name="body"]').forEach(auditResizeComposer);
+  }
   window.visualViewport?.addEventListener('resize',auditChatViewport);window.visualViewport?.addEventListener('scroll',auditChatViewport);window.addEventListener('resize',auditChatViewport);auditChatViewport();
   window.addEventListener('keydown',event=>{
     const dialog=document.querySelector('#modal-root [role="dialog"]');if(!dialog)return;
