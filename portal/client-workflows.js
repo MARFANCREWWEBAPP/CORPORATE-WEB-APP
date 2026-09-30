@@ -274,3 +274,23 @@
     ];
     return `<dl class="audit-event-details">${fields.map(([label,value])=>`<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value || 'Sin indicar')}</dd></div>`).join('')}</dl>`;
   }
+
+  function auditAwaitingBudget(event,user) {
+    return user?.role!=='VENUE_USER' && ['BUDGET_SENT','PENDING_RESPONSE'].includes(event.status)
+      && ['VENUE','CLIENT','AGENCY'].includes(event.waitingOn)
+      && event.budgets.some(b=>b.isCurrent&&['SENT','FINAL'].includes(b.status));
+  }
+  const auditBudgetNeedsUser=eventNeedsUser;
+  eventNeedsUser=function(event,user=currentUser()) {
+    if(auditAwaitingBudget(event,user)&&event.assignedCommercialId&&!pendingTaskCount(event,'MARQUEE')&&!pendingInfoCount(event,'MARQUEE'))return isDue(event.nextActionDue);
+    return auditBudgetNeedsUser(event,user);
+  };
+  const auditBudgetWorkRow=renderV4WorkRow;
+  renderV4WorkRow=function(event,user=currentUser()) {
+    const html=auditBudgetWorkRow(event,user);
+    if(!auditAwaitingBudget(event,user))return html;
+    return html.replace('class="v4-work-row ','class="v4-work-row audit-budget-waiting ')
+      .replace('<span class="v4-work-top">','<span class="v4-work-top"><span class="audit-budget-sent">Presupuesto enviado · esperando respuesta</span>')
+      .replace(escapeHtml(dueText(event.nextActionDue)),isDue(event.nextActionDue)?'Seguimiento pendiente':escapeHtml('Seguimiento: '+dueText(event.nextActionDue).toLowerCase()))
+      .replace('>Resolver ','>Ver seguimiento ');
+  };

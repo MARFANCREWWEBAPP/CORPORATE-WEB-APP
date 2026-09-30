@@ -50,3 +50,39 @@ test('S3/R2 document replicas require review and confirmation, are encrypted and
   await storage.copyReviewed(user,{digest:plan.digest,confirm:true});assert.equal(storage.status().verified,5);const file=portal.store.read().events.flatMap(e=>e.budgets)[0];const original=portal.store.file(user,file.fileKey).bytes;assert.deepEqual(await storage.recover(file.fileKey),original);assert.ok([...objects.values()].every(bytes=>!bytes.includes(Buffer.from('%PDF-'))));
   const demo=require('../portal/object-storage').createObjectStorage(portal.store,{...env,DEMO_MODE:'1'},()=>{throw new Error('No external calls in demo');});assert.equal(demo.configured,false);assert.equal((await demo.copyReviewed(user,{digest:demo.review(user).digest,confirm:true})).simulated,true);
 });
+
+test('Every published budget renews the response deadline; drafts and confirmed events preserve their workflow',async t=>{
+  const {portal,venue}=await fixture(t),store=portal.store,user=store.read().users.find(u=>u.role==='ADMIN');
+  const id=(await venue.request('/events','POST',{eventName:'Seguimiento de versiones',eventDate:'2027-07-15'})).data.result.id;
+  const current=()=>store.read().events.find(e=>e.id===id);
+  const upload=status=>store.addFile(user,id,{kind:'budgets',status,originalName:'propuesta.pdf',mimeType:'application/pdf',revision:current().revision},Buffer.from('%PDF-1.4 demo'));
+  store.transaction(user,'TEST_SETUP',state=>{state.settings.budgetResponseDays=4;const e=state.events.find(e=>e.id===id);e.nextActionDue='2020-01-01';});
+  const first=upload('SENT'),due=require('../portal/budget-follow-up').responseDue(store.read().settings,first.createdAt);
+  assert.equal(current().nextActionDue,due);assert.equal(current().waitingOn,'VENUE');assert.equal(current().status,'BUDGET_SENT');
+  store.transaction(user,'TEST_OLD_DEADLINE',state=>{const e=state.events.find(e=>e.id===id);e.nextActionDue='2020-01-01';e.budgetSentAt='2020-01-01T00:00:00Z';});
+  upload('DRAFT');assert.equal(current().nextActionDue,'2020-01-01');assert.equal(current().budgetSentAt,'2020-01-01T00:00:00Z');
+  const second=upload('SENT');assert.equal(current().nextActionDue,due);assert.equal(current().budgetSentAt,second.createdAt);assert.equal(current().nextAction,'Revisar presupuesto V3');
+  store.saveRules(user,{rules:{BUDGET_SENT:{days:7,waitingOn:'VENUE',nextAction:'Revisar presupuesto'}}});
+  const final=upload('FINAL');assert.equal(current().nextActionDue,require('../portal/budget-follow-up').responseDue(store.read().settings,final.createdAt));assert.notEqual(current().nextActionDue,due);
+  store.transaction(user,'TEST_CONFIRMED',state=>{const e=state.events.find(e=>e.id===id);e.status='CONFIRMED';e.waitingOn='MARQUEE';e.nextAction='Preparar montaje';e.nextActionDue='2027-07-14';});
+  upload('SENT');assert.equal(current().status,'CONFIRMED');assert.equal(current().nextAction,'Preparar montaje');assert.equal(current().nextActionDue,'2027-07-14');
+});
+
+test('Budget response days follow the Madrid calendar across daylight saving changes',()=>{
+  const {responseDue}=require('../portal/budget-follow-up');
+  assert.equal(responseDue({budgetResponseDays:4},'2026-03-28T23:30:00Z'),'2026-04-02');
+  assert.equal(responseDue({budgetResponseDays:4},'2026-10-24T22:30:00Z'),'2026-10-29');
+});
+
+test('Published budgets awaiting another party leave the commercial work queue until follow-up is due',()=>{
+  const vm=require('node:vm'),source=fs.readFileSync(require.resolve('../portal/client-workflows.js'),'utf8');
+  const context={eventNeedsUser:()=>true,renderV4WorkRow:()=>'',isDue:date=>date<='2026-09-30',pendingTaskCount:e=>e.internalTasks||0,pendingInfoCount:e=>e.internalInfo||0};
+  vm.createContext(context);vm.runInContext(source.slice(source.indexOf('  function auditAwaitingBudget(')),context);
+  const event={status:'BUDGET_SENT',waitingOn:'VENUE',assignedCommercialId:'commercial',nextActionDue:'2026-10-04',budgets:[{isCurrent:true,status:'SENT'}]};
+  assert.equal(context.eventNeedsUser(event,{role:'COMMERCIAL'}),false);
+  assert.equal(context.eventNeedsUser(event,{role:'VENUE_USER'}),true);
+  assert.equal(context.eventNeedsUser({...event,nextActionDue:'2026-09-29'},{role:'ADMIN'}),true);
+  assert.equal(context.eventNeedsUser({...event,internalTasks:1},{role:'ADMIN'}),true);
+  assert.equal(context.eventNeedsUser({...event,internalInfo:1},{role:'ADMIN'}),true);
+  assert.equal(context.eventNeedsUser({...event,waitingOn:'MARQUEE'},{role:'ADMIN'}),true);
+});
