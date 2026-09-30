@@ -133,3 +133,33 @@ test('PDF viewer assets load from the application while documents stay authentic
   assert.equal((await client().request('/files/unknown')).status,401);
   assert.equal((await fetch(base+'/pdfjs/package.json')).status,404);
 });
+
+test('Clients can request a new expired budget or cancel it with a version-bound audit trail',async t=>{
+  const {a,space,ok,portal}=await fixture(t),one=await space('Respuestas','responses@spaces.test'),other=await space('Otro','other-responses@spaces.test');
+  const event=(await ok(one.c.request('/events','POST',{eventName:'Respuesta del cliente',eventDate:'2028-02-10'}))).result;
+  const budget=(await ok(a.request('/events/'+event.id+'/files','POST',{kind:'budgets',status:'SENT',originalName:'Propuesta.pdf',base64:Buffer.from('%PDF-1.4\n%%EOF').toString('base64'),validUntil:'2020-01-01',amount:900}))).result;
+  const current=()=>portal.store.read().events.find(e=>e.id===event.id),route='/events/'+event.id+'/budgets/'+budget.id+'/decision';
+  assert.equal((await other.c.request(route,'POST',{decision:'CANCELLED',reason:'No autorizado',revision:current().revision})).status,404);
+  assert.equal((await one.c.request(route,'POST',{decision:'ACCEPTED',revision:current().revision})).status,409);
+  await ok(one.c.request(route,'POST',{decision:'CHANGES_REQUESTED',reason:'Añadir iluminación',revision:current().revision}));
+  assert.equal(current().status,'NEGOTIATION');assert.equal(current().waitingOn,'MARQUEE');assert.match(current().nextAction,/Preparar nuevo presupuesto/);assert.ok(current().nextActionDue);
+  assert.equal((await one.c.request(route,'POST',{decision:'CANCELLED',reason:'',revision:current().revision})).status,400);
+  const revision=current().revision,headers={'Idempotency-Key':crypto.randomUUID()},body={decision:'CANCELLED',reason:'El cliente cancela el evento',revision};
+  await ok(one.c.request(route,'POST',body,headers));await ok(one.c.request(route,'POST',body,headers));
+  const cancelled=current();assert.equal(cancelled.status,'CANCELLED');assert.equal(cancelled.waitingOn,'NONE');assert.equal(cancelled.nextActionDue,'');assert.ok(cancelled.archivedAt);assert.equal(cancelled.budgets[0].decisions.length,2);
+  const record=cancelled.budgets[0].decisions.at(-1);assert.equal(record.decision,'CANCELLED');assert.equal(record.actorEmail,'responses@spaces.test');assert.equal(record.fileSha256,budget.sha256);assert.equal(record.version,budget.version);
+  assert.ok(portal.store.file(portal.store.read().users.find(u=>u.role==='ADMIN'),budget.fileKey).bytes.length);
+  assert.equal((await one.c.request(route,'POST',{decision:'ACCEPTED',revision:cancelled.revision})).status,409);
+});
+
+test('Budget response controls expose all three choices and retain the selected state without offering a second final decision',()=>{
+  const vm=require('node:vm'),source=fs.readFileSync(require.resolve('../portal/client-workflows.js'),'utf8');
+  const context={visibleBudgets:e=>e.budgets,portalClosed:['CANCELLED','COMPLETED','NOT_ACCEPTED'],escapeHtml:v=>String(v).replaceAll('<','&lt;'),auditMoney:()=> '900 €'};
+  vm.createContext(context);vm.runInContext(source.slice(source.indexOf('  const auditDecisionLabels='),source.indexOf('  const auditResponseSummary=')),context);
+  const budget={id:'b1',isCurrent:true,status:'SENT',version:1,decisions:[]},event={id:'e1',finalClient:'<Cliente>',status:'BUDGET_SENT',budgets:[budget]};
+  const html=context.auditBudgetResponse(event,{});for(const label of ['Aceptado','Pendiente de nuevo presupuesto','Cancelado'])assert.ok(html.includes(label));assert.ok(html.includes('&lt;Cliente>'));
+  budget.decisions.push({decision:'CHANGES_REQUESTED'});assert.match(context.auditBudgetResponse(event,{}),/data-decision="CHANGES_REQUESTED" aria-pressed="true"/);
+  budget.decisions.push({decision:'ACCEPTED'});assert.ok(!context.auditBudgetResponse(event,{}).includes('data-action="audit-decision"'));
+  event.status='CANCELLED';assert.match(context.auditBudgetResponse(event,{}),/Estado: <strong>Cancelado/);
+  budget.status='DRAFT';assert.equal(context.auditBudgetResponse(event,{}),'');
+});
