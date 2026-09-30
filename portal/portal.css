@@ -163,3 +163,14 @@ img.b2be-logo{background:#fff;border-radius:6px;object-fit:contain;padding:4px;f
 .audit-budget-waiting .v4-work-top{flex-wrap:wrap}
 .audit-budget-waiting .v4-work-top em.overdue{color:#946015}
 .audit-budget-sent{font-size:13px;font-weight:700;color:#206546;background:#eaf7ef;border-radius:6px;padding:4px 7px}
+
+.audit-budget-response{border:1px solid #dce4ef;background:#fff}
+.audit-budget-response p{font-size:14px;line-height:1.5}
+.audit-budget-response .audit-response-status{font-size:16px}
+.audit-budget-response .portal-actions{display:flex;flex-wrap:wrap;gap:10px}
+.audit-budget-response .btn{white-space:normal;text-align:center;min-height:44px}
+.audit-budget-response .audit-response-accepted{color:#206546;border-color:#9bcdb0}
+.audit-budget-response .audit-response-changes_requested{color:#875c12;border-color:#dec795}
+.audit-budget-response .audit-response-cancelled{color:#a33131;border-color:#dfa6a6}
+.audit-budget-response [aria-pressed="true"]{background:#fff1d6;border-width:2px}
+@media(max-width:600px){.audit-budget-response .portal-actions>.btn{width:100%;flex:0 0 100%}}

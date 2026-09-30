@@ -252,7 +252,7 @@ function createPortal(options={}) {
       else if(route==='/api/drafts'&&req.method==='POST')result=store.saveDraft(user,null,await readJson(req));
       else if(route.match(/^\/api\/drafts\/[^/]+$/)&&req.method==='PATCH')result=store.saveDraft(user,route.split('/').at(-1),await readJson(req));
       else if(route.match(/^\/api\/events\/[^/]+\/message-draft$/)&&req.method==='POST')result=store.messageDraft(user,route.split('/')[3],await readJson(req));
-      else if(route.match(/^\/api\/events\/[^/]+\/budgets\/[^/]+\/decision$/)&&req.method==='POST'){result=store.budgetDecision(user,route.split('/')[3],route.split('/')[5],await readJson(req));if(result.decision==='REJECTED'){try{makeBackup('evento archivado');}catch{}}}
+      else if(route.match(/^\/api\/events\/[^/]+\/budgets\/[^/]+\/decision$/)&&req.method==='POST'){result=store.budgetDecision(user,route.split('/')[3],route.split('/')[5],await readJson(req));if(['REJECTED','CANCELLED'].includes(result.decision)){try{makeBackup('evento archivado');}catch{}}}
       else if(route==='/api/clients/merge'&&req.method==='POST')result=store.mergeClients(user,await readJson(req));
       else if(route==='/api/clients'&&req.method==='POST')result=store.saveClient(user,null,await readJson(req));
       else if(route.match(/^\/api\/clients\/[^/]+$/)&&req.method==='PATCH')result=store.saveClient(user,route.split('/').at(-1),await readJson(req));

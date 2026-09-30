@@ -56,19 +56,19 @@ function install(Store) {
     if(CLOSED.includes(event.status))fail(409,'El evento está archivado. Solicita su reapertura.');
     const budget=event.budgets.find(b=>b.id===budgetId&&['SENT','FINAL'].includes(b.status));
     if(!budget||!budget.isCurrent)fail(409,'Hay una versión más reciente. Abre el presupuesto vigente antes de decidir.');
-    if(budget.validUntil&&budget.validUntil<now().slice(0,10))fail(409,'La propuesta ha caducado. Solicita una nueva versión.');
-    if(budget.decisions?.some(d=>['ACCEPTED','REJECTED'].includes(d.decision)))fail(409,'Esta versión ya tiene una decisión definitiva. Publica otra versión para modificarla.');
-    const decision=choice(data.decision,['ACCEPTED','REJECTED','CHANGES_REQUESTED']);
+    if(data.decision==='ACCEPTED'&&budget.validUntil&&budget.validUntil<now().slice(0,10))fail(409,'La propuesta ha caducado. Solicita una nueva versión.');
+    if(budget.decisions?.some(d=>['ACCEPTED','REJECTED','CANCELLED'].includes(d.decision)))fail(409,'Esta versión ya tiene una decisión definitiva. Publica otra versión para modificarla.');
+    const decision=choice(data.decision,['ACCEPTED','REJECTED','CHANGES_REQUESTED','CANCELLED']);
     const reason=text(data.reason,5000,decision!=='ACCEPTED');
     let signature=null;if(data.signature){if(decision!=='ACCEPTED'||data.signature.consent!==true)fail(400,'Debes aceptar expresamente el presupuesto antes de firmar.');signature={name:text(data.signature.name,200,true),method:'typed-name',statement:'He leído esta versión y acepto el presupuesto en nombre del cliente.',signedAt:now(),documentSha256:budget.sha256};}
     if(decision==='ACCEPTED'){
       this.checkSchedule(state,event,data,user);
       event.acceptedAt=event.acceptedAt||now();event.acceptedBudgetId=budget.id;event.acceptedAmountCents=budget.amountCents;event.status='CONFIRMED';event.waitingOn='NONE';
-    }else if(decision==='REJECTED'){event.status='NOT_ACCEPTED';event.archivedAt=now();event.closeReason=reason;}
-    else{event.status='NEGOTIATION';event.waitingOn='MARQUEE';event.nextAction='Revisar cambios solicitados en presupuesto V'+budget.version;}
+    }else if(['REJECTED','CANCELLED'].includes(decision)){event.status=decision==='CANCELLED'?'CANCELLED':'NOT_ACCEPTED';event.archivedAt=now();event.closeReason=reason;event.waitingOn='NONE';event.nextAction='';event.nextActionDue='';}
+    else{event.status='NEGOTIATION';event.waitingOn='MARQUEE';event.nextAction='Preparar nuevo presupuesto a partir de V'+budget.version;event.nextActionDue='';}
     const record={id:id(),decision,reason,actorId:user.id,actorName:[user.firstName,user.lastName].filter(Boolean).join(' '),actorEmail:user.email,createdAt:now(),version:budget.version,fileSha256:budget.sha256};
     (budget.decisions||=[]).push(record);
-    this.history(event,user,`Presupuesto V${budget.version}: ${decision==='ACCEPTED'?'aceptado':decision==='REJECTED'?'rechazado':'cambios solicitados'}${reason?' · '+reason:''}`,'BUDGET_DECISION');
+    this.history(event,user,`Presupuesto V${budget.version}: ${decision==='ACCEPTED'?'aceptado':decision==='REJECTED'?'rechazado':decision==='CANCELLED'?'cancelado':'pendiente de nuevo presupuesto'}${reason?' · '+reason:''}`,'BUDGET_DECISION');
     if(signature)record.signature=signature;
     this.notify(state,event,user,'Decisión sobre presupuesto V'+budget.version,event.eventName);return record;
   });};
